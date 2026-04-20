@@ -66,6 +66,10 @@ Extract ALL visible text in reading order (left-to-right, top-to-bottom).
 - NEVER correct spelling mistakes — preserve as-is
 - Distinguish carefully: O vs 0, l vs 1, I vs 1
 - Preserve all diacritics: é, ñ, ü, ş, ğ, č, etc.
+- TWO-COLUMN TABLE LAYOUTS: Many forms and patent documents use a two-column table
+  where field labels appear in the left column and values (or blank fields) in the right.
+  ALWAYS detect and transcribe these as pipe-format Markdown tables, even if column
+  borders are faint, implied, or obscured by watermarks. Do not skip any field.
 
 ## Step 3 — Output Format
 Structure your response EXACTLY in these four sections with these exact headers:
@@ -192,6 +196,37 @@ def transcribe_document(
 # ---------------------------------------------------------------------------
 # Response Parser
 # ---------------------------------------------------------------------------
+def _strip_code_fences(text: str) -> str:
+    """
+    Claude bazen metadata bölümünü ``` kod bloğuna sarar.
+    Bu fonksiyon açılış ve kapanış ``` işaretlerini temizler.
+    """
+    text = text.strip()
+    # Açılış fence: ```  ya da ```text  ya da ```yaml vb.
+    text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+    # Kapanış fence
+    text = re.sub(r"\n?```$", "", text)
+    return text.strip()
+
+
+def _clean_html_entities(text: str) -> str:
+    """&nbsp; ve diğer yaygın HTML entity'lerini temiz karakterlere çevirir."""
+    replacements = {
+        "&nbsp;":  " ",
+        "&amp;":   "&",
+        "&lt;":    "<",
+        "&gt;":    ">",
+        "&quot;":  '"',
+        "&#39;":   "'",
+        "&mdash;": "—",
+        "&ndash;": "–",
+        "&hellip;": "…",
+    }
+    for entity, char in replacements.items():
+        text = text.replace(entity, char)
+    return text
+
+
 def _parse_sections(text: str) -> dict:
     """Claude yanıtından 4 bölümü ayıklar."""
     pattern = re.compile(
@@ -200,11 +235,16 @@ def _parse_sections(text: str) -> dict:
     )
     found = {m.group(1): m.group(2).strip() for m in pattern.finditer(text)}
 
+    # Metadata bölümündeki kod fence işaretlerini temizle
+    metadata_raw = found.get("1", "Metadata ayrıştırılamadı.")
+    metadata_clean = _strip_code_fences(metadata_raw)
+
+    # Tüm bölümlerde HTML entity'lerini temizle
     return {
-        "metadata":         found.get("1", "Metadata ayrıştırılamadı."),
-        "content":          found.get("2", "İçerik ayrıştırılamadı."),
-        "formatting_notes": found.get("3", "Biçimlendirme notu bulunamadı."),
-        "quality_notes":    found.get("4", "Kalite notu bulunamadı."),
+        "metadata":         _clean_html_entities(metadata_clean),
+        "content":          _clean_html_entities(found.get("2", "İçerik ayrıştırılamadı.")),
+        "formatting_notes": _clean_html_entities(found.get("3", "Biçimlendirme notu bulunamadı.")),
+        "quality_notes":    _clean_html_entities(found.get("4", "Kalite notu bulunamadı.")),
     }
 
 
