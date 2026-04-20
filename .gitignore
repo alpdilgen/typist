@@ -1,0 +1,28 @@
+# Ortam değişkenleri — ASLA commit etme
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test dosyaları
+test_uploads/
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.tiff
+*.bmp
+*.webp
