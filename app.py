@@ -394,10 +394,25 @@ st.markdown("""
 # API Key Management
 # ---------------------------------------------------------------------------
 def get_api_key() -> str | None:
-    """Reads API key from .env first, then from sidebar input."""
+    """
+    API key priority order:
+      1. Environment variable  — ANTHROPIC_API_KEY in .env  (local dev)
+      2. Streamlit secrets     — .streamlit/secrets.toml    (local dev)
+                                 App settings → Secrets      (Streamlit Cloud)
+      3. Sidebar manual input  — fallback when neither is set
+    """
+    # 1. .env / shell environment
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if key:
         return key
+    # 2. Streamlit secrets (secrets.toml or Streamlit Cloud settings)
+    try:
+        key = st.secrets.get("ANTHROPIC_API_KEY", "")
+        if key:
+            return key
+    except Exception:
+        pass
+    # 3. Manual sidebar input
     return st.session_state.get("api_key", "")
 
 
