@@ -6,8 +6,10 @@ Dependencies: anthropic, python-docx, Pillow
 """
 
 import base64
+import html as _html
 import io
 import re
+import uuid
 from datetime import date
 from typing import Optional
 
@@ -350,17 +352,21 @@ def create_docx(result: dict) -> bytes:
 
     def add_heading(text: str, level: int = 1):
         p = doc.add_heading(text, level=level)
+        p.paragraph_format.space_before = Pt(8)
+        p.paragraph_format.space_after  = Pt(4)
         for run in p.runs:
             run.font.color.rgb = ANOVA_CHARCOAL if level == 1 else ANOVA_CORAL
         return p
 
     def add_divider():
         p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(4)
+        p.paragraph_format.space_after  = Pt(0)
         pPr = p._p.get_or_add_pPr()
         pBdr = OxmlElement("w:pBdr")
         bottom = OxmlElement("w:bottom")
         bottom.set(qn("w:val"), "single")
-        bottom.set(qn("w:sz"), "6")
+        bottom.set(qn("w:sz"), "4")
         bottom.set(qn("w:space"), "1")
         bottom.set(qn("w:color"), "4ECDC4")
         pBdr.append(bottom)
@@ -389,16 +395,19 @@ def create_docx(result: dict) -> bytes:
     # 1. TITLE
     # =========================================================================
     title = doc.add_heading("Anova Typist — Transcription Report", 0)
+    title.paragraph_format.space_before = Pt(0)
+    title.paragraph_format.space_after  = Pt(2)
     for run in title.runs:
         run.font.color.rgb = ANOVA_CHARCOAL
 
     subtitle = doc.add_paragraph(f"File: {result.get('filename', 'unknown')}")
+    subtitle.paragraph_format.space_before = Pt(0)
+    subtitle.paragraph_format.space_after  = Pt(4)
     subtitle.runs[0].font.size = Pt(10)
     subtitle.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
     subtitle.runs[0].font.italic = True
 
     add_divider()
-    doc.add_paragraph()
 
     # =========================================================================
     # 2. DOCUMENT INFORMATION
@@ -432,7 +441,6 @@ def create_docx(result: dict) -> bytes:
             p.runs[0].font.size = Pt(10)
 
     add_divider()
-    doc.add_paragraph()
 
     # =========================================================================
     # 3. FORMATTING NOTES
@@ -441,11 +449,11 @@ def create_docx(result: dict) -> bytes:
     fn_text = result.get("formatting_notes", "")
     if fn_text:
         p = doc.add_paragraph(fn_text)
+        p.paragraph_format.space_after = Pt(4)
         if p.runs:
             p.runs[0].font.size = Pt(10)
 
     add_divider()
-    doc.add_paragraph()
 
     # =========================================================================
     # 4. QUALITY NOTES
@@ -454,14 +462,14 @@ def create_docx(result: dict) -> bytes:
     qn_text = result.get("quality_notes", "")
     if qn_text:
         p = doc.add_paragraph(qn_text)
+        p.paragraph_format.space_after = Pt(4)
         if p.runs:
             p.runs[0].font.size = Pt(10)
 
     add_divider()
-    doc.add_paragraph()
 
     # =========================================================================
-    # 5. FLAGGED ITEMS  (only rendered when there are uncertain elements)
+    # 5. FLAGGED ITEMS
     # =========================================================================
     add_heading("4. Flagged Items", level=1)
 
@@ -472,7 +480,6 @@ def create_docx(result: dict) -> bytes:
             fill_hex="FFF3CD",
             text_color=ANOVA_AMBER,
         )
-        doc.add_paragraph()
 
         # Table: # | Flag Type | Content
         hdr_labels = ["#", "Flag Type", "Content"]
@@ -487,7 +494,6 @@ def create_docx(result: dict) -> bytes:
                 run.bold = True
                 run.font.size = Pt(10)
                 run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-            # Charcoal background for header
             tc = hdr_cells[col_idx]._tc
             tcPr = tc.get_or_add_tcPr()
             shd = OxmlElement("w:shd")
@@ -508,7 +514,6 @@ def create_docx(result: dict) -> bytes:
                     if col_idx == 1:
                         run.font.color.rgb = ANOVA_AMBER
                         run.bold = True
-            # Alternate row shading
             if row_idx % 2 == 0:
                 for col_idx in range(3):
                     tc = row_cells[col_idx]._tc
@@ -526,7 +531,6 @@ def create_docx(result: dict) -> bytes:
             p.runs[0].font.color.rgb = RGBColor(0x55, 0x99, 0x55)
 
     add_divider()
-    doc.add_paragraph()
 
     # =========================================================================
     # 6. TRANSCRIPTION
@@ -545,11 +549,11 @@ def create_docx(result: dict) -> bytes:
     # =========================================================================
     # FOOTER
     # =========================================================================
-    doc.add_paragraph()
     footer_p = doc.add_paragraph(
         f"Anova Translation  |  Generated: {date.today().isoformat()}"
         f"  |  Model: {result.get('model', 'claude-sonnet-4-6')}"
     )
+    footer_p.paragraph_format.space_before = Pt(8)
     footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in footer_p.runs:
         run.font.size = Pt(8)
@@ -673,3 +677,285 @@ def _add_table(doc: Document, lines: list[str]):
                 if r_idx == 0:
                     for run in cell.paragraphs[0].runs:
                         run.bold = True
+
+
+# ---------------------------------------------------------------------------
+# XML helpers for XLIFF generation
+# ---------------------------------------------------------------------------
+def _xml_escape(text: str) -> str:
+    """Escapes special XML characters in element content."""
+    return _html.escape(str(text), quote=False)
+
+def _xml_attr(text: str) -> str:
+    """Escapes special XML characters in attribute values."""
+    return _html.escape(str(text), quote=True)
+
+
+# ---------------------------------------------------------------------------
+# Source language extractor
+# ---------------------------------------------------------------------------
+def _extract_source_language(metadata: str) -> str:
+    """
+    Parses the source language ISO code from the metadata 'Languages Identified' line.
+    Returns 'und' (undetermined) if not found.
+    """
+    match = re.search(
+        r"Languages?\s+Identified\s*:\s*([a-z]{2,3}(?:-[A-Z]{2})?)",
+        metadata,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1)
+    return "und"
+
+
+# ---------------------------------------------------------------------------
+# XLIFF segmenter
+# ---------------------------------------------------------------------------
+def _segment_for_xliff(content: str) -> list:
+    """
+    Splits transcription content into translatable segments for XLIFF export.
+
+    Rules:
+    - Each non-empty paragraph → one segment
+    - Heading lines (#, ##, ###) → one segment each (markdown stripped)
+    - Table content rows → one segment per row (pipe format cleaned)
+    - Table separator rows (|---|) → skipped
+    - Page break markers → skipped
+    - List items → one segment each
+    - Uncertain/flag markers are preserved inside segment text
+    """
+    segments = []
+    current_para = []
+
+    def flush_para():
+        if current_para:
+            segments.append(" ".join(current_para))
+            current_para.clear()
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        # Skip empties → flush accumulated paragraph
+        if not stripped:
+            flush_para()
+            continue
+
+        # Skip page break markers
+        if "---PAGE BREAK---" in stripped or re.match(r"^\[PAGE", stripped, re.IGNORECASE):
+            flush_para()
+            continue
+
+        # Skip table separator rows
+        if re.match(r"^\|[\s\-|:]+\|$", stripped):
+            continue
+
+        # Table content rows
+        if stripped.startswith("|"):
+            flush_para()
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            row_text = " | ".join(c for c in cells if c)
+            if row_text:
+                segments.append(row_text)
+            continue
+
+        # Heading lines
+        if stripped.startswith("#"):
+            flush_para()
+            heading_text = re.sub(r"^#+\s*", "", stripped)
+            if heading_text:
+                segments.append(heading_text)
+            continue
+
+        # List items
+        if re.match(r"^(\d+\.|[-*•])\s+", stripped):
+            flush_para()
+            segments.append(stripped)
+            continue
+
+        # Regular text — accumulate
+        current_para.append(stripped)
+
+    flush_para()
+
+    # Remove empty or single-character leftovers
+    return [s for s in segments if len(s.strip()) > 1]
+
+
+# ---------------------------------------------------------------------------
+# XLIFF 1.2 — standard
+# ---------------------------------------------------------------------------
+def create_xliff(result: dict, target_language: str, source_language: str = "") -> bytes:
+    """
+    Generates a standard XLIFF 1.2 bilingual file from transcription result.
+    source_language: BCP-47 code (e.g. 'en-US'). Auto-detected if empty.
+    target_language: BCP-47 code (e.g. 'tr-TR').
+    Returns: XLIFF file content as UTF-8 bytes.
+    """
+    src_lang = source_language or _extract_source_language(result.get("metadata", ""))
+    filename = result.get("filename", "document")
+    segments = _segment_for_xliff(result.get("content", ""))
+    today    = date.today().isoformat()
+    model    = result.get("model", "claude-sonnet-4-6")
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">',
+        f'  <file original="{_xml_attr(filename)}"',
+        f'        source-language="{src_lang}"',
+        f'        target-language="{target_language}"',
+        f'        datatype="x-document"',
+        f'        tool-id="anova-typist">',
+        '    <header>',
+        '      <tool tool-id="anova-typist" tool-name="Anova Typist"',
+        '            tool-version="1.0" tool-company="Anova Translation"/>',
+        f'      <note>Transcribed by Anova Typist on {today} | Model: {model}</note>',
+        '    </header>',
+        '    <body>',
+    ]
+
+    for i, seg in enumerate(segments, start=1):
+        lines += [
+            f'      <trans-unit id="{i}">',
+            f'        <source xml:space="preserve">{_xml_escape(seg)}</source>',
+            f'        <target/>',
+            f'      </trans-unit>',
+        ]
+
+    lines += [
+        '    </body>',
+        '  </file>',
+        '</xliff>',
+    ]
+    return "\n".join(lines).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# SDLXLIFF — SDL Trados Studio
+# ---------------------------------------------------------------------------
+def create_sdlxliff(result: dict, target_language: str, source_language: str = "") -> bytes:
+    """
+    Generates an SDLXLIFF bilingual file compatible with SDL Trados Studio.
+    Each segment is marked conf="Draft" origin="mt" (machine-transcribed).
+    Returns: SDLXLIFF file content as UTF-8 bytes.
+    """
+    src_lang  = source_language or _extract_source_language(result.get("metadata", ""))
+    filename  = result.get("filename", "document")
+    segments  = _segment_for_xliff(result.get("content", ""))
+    file_id   = str(uuid.uuid4())
+    today     = date.today().isoformat() + "T00:00:00"
+    model     = result.get("model", "claude-sonnet-4-6")
+
+    lines = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<xliff xmlns:sdl="http://sdl.com/FileTypes/SdlXliff/1.0"',
+        '       xmlns="urn:oasis:names:tc:xliff:document:1.2"',
+        '       version="1.2" sdl:version="1.0">',
+        f'  <file original="{_xml_attr(filename)}"',
+        f'        datatype="x-document"',
+        f'        source-language="{src_lang}"',
+        f'        target-language="{target_language}">',
+        '    <header>',
+        '      <file-info xmlns="http://sdl.com/FileTypes/SdlXliff/1.0">',
+        f'        <value key="SDL:FileId">{file_id}</value>',
+        f'        <value key="SDL:CreationDate">{today}</value>',
+        f'        <value key="SDL:OriginalFilePath">{_xml_escape(filename)}</value>',
+        '        <sniff-info>',
+        f'          <detected-source-lang detection-level="Certain" lang="{src_lang}"/>',
+        f'          <detected-target-lang detection-level="Certain" lang="{target_language}"/>',
+        '        </sniff-info>',
+        '      </file-info>',
+        '      <tool tool-id="anova-typist" tool-name="Anova Typist"',
+        '            tool-version="1.0" tool-company="Anova Translation"/>',
+        f'      <note>Transcribed by Anova Typist on {today[:10]} | Model: {model}</note>',
+        '    </header>',
+        '    <body>',
+    ]
+
+    for i, seg in enumerate(segments, start=1):
+        lines += [
+            f'      <trans-unit id="tu{i}">',
+            f'        <source xml:space="preserve">{_xml_escape(seg)}</source>',
+            f'        <seg-source>',
+            f'          <mrk mtype="seg" mid="{i}">{_xml_escape(seg)}</mrk>',
+            f'        </seg-source>',
+            f'        <target>',
+            f'          <mrk mtype="seg" mid="{i}"/>',
+            f'        </target>',
+            f'        <sdl:seg-defs>',
+            f'          <sdl:seg id="{i}" conf="Draft" origin="mt"/>',
+            f'        </sdl:seg-defs>',
+            f'      </trans-unit>',
+        ]
+
+    lines += [
+        '    </body>',
+        '  </file>',
+        '</xliff>',
+    ]
+    return "\n".join(lines).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# MQXLIFF — memoQ
+# ---------------------------------------------------------------------------
+def create_mqxliff(result: dict, target_language: str, source_language: str = "") -> bytes:
+    """
+    Generates an MQXLIFF bilingual file compatible with memoQ.
+    Each segment has mq:status="NotStarted" and a unique mq:segmentguid.
+    Returns: MQXLIFF file content as UTF-8 bytes.
+    """
+    src_lang   = source_language or _extract_source_language(result.get("metadata", ""))
+    filename   = result.get("filename", "document")
+    segments   = _segment_for_xliff(result.get("content", ""))
+    file_id    = str(uuid.uuid4())
+    project_id = str(uuid.uuid4())
+    word_count = sum(len(s.split()) for s in segments)
+    model      = result.get("model", "claude-sonnet-4-6")
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<xliff version="1.2"',
+        '       xmlns="urn:oasis:names:tc:xliff:document:1.2"',
+        '       xmlns:mq="MQXliff"',
+        '       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+        '       xsi:schemaLocation="urn:oasis:names:tc:xliff:document:1.2 xliff-core-1.2-transitional.xsd">',
+        f'  <file original="{_xml_attr(filename)}"',
+        f'        mq:id="{file_id}"',
+        f'        mq:projectid="{project_id}"',
+        f'        source-language="{src_lang}"',
+        f'        target-language="{target_language}"',
+        f'        datatype="x-memoq">',
+        '    <header>',
+        '      <tool tool-id="MQ" tool-name="MemoQ" tool-version="11.0.0" tool-company="Kilgray"/>',
+        f'      <mq:docinformation mq:docname="{_xml_attr(filename)}"',
+        f'                         mq:numberofwords="{word_count}"',
+        f'                         mq:isabstract="isabstract"',
+        f'                         mq:hashistory="false"',
+        f'                         mq:nosplitjoin="true"/>',
+        f'      <note>Transcribed by Anova Typist | Model: {model}</note>',
+        '    </header>',
+        '    <body>',
+    ]
+
+    for i, seg in enumerate(segments, start=1):
+        seg_guid = str(uuid.uuid4())
+        lines += [
+            f'      <trans-unit id="{i}"',
+            f'                  mq:status="NotStarted"',
+            f'                  mq:segmentguid="{seg_guid}"',
+            f'                  mq:lastchangedtimestamp="0001-01-01T00:00:00Z"',
+            f'                  mq:firstlabel="{i}"',
+            f'                  mq:lastlabel="{i}"',
+            f'                  mq:nosplitjoin="false">',
+            f'        <source xml:space="preserve">{_xml_escape(seg)}</source>',
+            f'        <target xml:space="preserve"></target>',
+            f'      </trans-unit>',
+        ]
+
+    lines += [
+        '    </body>',
+        '  </file>',
+        '</xliff>',
+    ]
+    return "\n".join(lines).encode("utf-8")
