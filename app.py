@@ -106,6 +106,10 @@ load_dotenv()
 #   Phase 2 — Save & Export done          → everything locked, downloads shown
 # ---------------------------------------------------------------------------
 def _compute_phase() -> int:
+    # Phase 1 starts the MOMENT the button is clicked (t_processing flag),
+    # not after the API call finishes — so controls lock immediately.
+    if "t_processing" in st.session_state:
+        return 1
     if "t_result" not in st.session_state:
         return 0
     if not st.session_state.get("t_ready_for_download", False):
@@ -587,11 +591,23 @@ start_btn = st.button(
 )
 
 # ---------------------------------------------------------------------------
-# Processing  (runs only when Start button is clicked)
+# Step 1 — Button clicked: store file, set processing flag, rerun immediately.
+# The rerun causes the script to restart from the top where _compute_phase()
+# returns 1 → _locked=True → all controls render as disabled BEFORE the API
+# call even begins.
 # ---------------------------------------------------------------------------
-if start_btn and uploaded_file:
-    file_bytes = uploaded_file.getvalue()
-    filename   = uploaded_file.name
+if start_btn and uploaded_file and "t_processing" not in st.session_state:
+    st.session_state["t_processing"]       = True
+    st.session_state["t_pending_bytes"]    = uploaded_file.getvalue()
+    st.session_state["t_pending_filename"] = uploaded_file.name
+    st.rerun()
+
+# ---------------------------------------------------------------------------
+# Step 2 — Processing (runs in the re-rendered run where controls are locked)
+# ---------------------------------------------------------------------------
+if st.session_state.get("t_processing"):
+    file_bytes = st.session_state.get("t_pending_bytes", b"")
+    filename   = st.session_state.get("t_pending_filename", "")
 
     progress_container = st.container()
     with progress_container:
@@ -687,19 +703,22 @@ if start_btn and uploaded_file:
         st.session_state["t_img_placeholders"] = include_image_placeholders
         st.session_state["t_model"]            = model
 
-        # Force a re-render from the top so _phase / _locked are recomputed
-        # with t_result now in session_state (phase 1 → all controls lock).
+        # Clear processing flags, then rerun so the editor renders.
+        for _k in ("t_processing", "t_pending_bytes", "t_pending_filename"):
+            st.session_state.pop(_k, None)
         st.rerun()
 
     except ValueError as e:
         st.error(f"❌ Error: {e}")
-        st.session_state.pop("t_result", None)   # clear stale results on error
+        for _k in ("t_processing", "t_pending_bytes", "t_pending_filename", "t_result"):
+            st.session_state.pop(_k, None)
     except Exception as e:
         st.error(f"❌ Unexpected error: {e}")
         with st.expander("Technical details"):
             import traceback
             st.code(traceback.format_exc())
-        st.session_state.pop("t_result", None)
+        for _k in ("t_processing", "t_pending_bytes", "t_pending_filename", "t_result"):
+            st.session_state.pop(_k, None)
 
 # ---------------------------------------------------------------------------
 # Results  (rendered from session_state — survives re-runs)
