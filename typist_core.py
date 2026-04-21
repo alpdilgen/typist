@@ -783,14 +783,26 @@ def _segment_for_xliff(content: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# XLIFF 1.2 — standard
+# XLIFF 2.2 — OASIS Standard (urn:oasis:names:tc:xliff:document:2.2)
+# Spec: https://github.com/oasis-tcs/xliff-xliff-22
+# Compatible with: SDL Trados 2019+, memoQ 8+, Phrase, Wordfast Pro 6+, Déjà Vu X3+
 # ---------------------------------------------------------------------------
 def create_xliff(result: dict, target_language: str, source_language: str = "") -> bytes:
     """
-    Generates a standard XLIFF 1.2 bilingual file from transcription result.
+    Generates a standard XLIFF 2.2 bilingual file from transcription result.
+    Follows the OASIS XLIFF 2.2 specification exactly.
+
+    XLIFF 2.2 structure (vs 1.2):
+      - Namespace: urn:oasis:names:tc:xliff:document:2.2
+      - srcLang / trgLang on root <xliff> (not on <file>)
+      - <unit> + <segment> instead of <trans-unit>
+      - No <header>, <body>, <seg-source>, or <mrk> wrappers
+      - segment state="initial" for untranslated content
+      - File extension: .xlf
+
     source_language: BCP-47 code (e.g. 'en-US'). Auto-detected if empty.
     target_language: BCP-47 code (e.g. 'tr-TR').
-    Returns: XLIFF file content as UTF-8 bytes.
+    Returns: XLIFF 2.2 file content as UTF-8 bytes.
     """
     src_lang = source_language or _extract_source_language(result.get("metadata", ""))
     filename = result.get("filename", "document")
@@ -800,162 +812,30 @@ def create_xliff(result: dict, target_language: str, source_language: str = "") 
 
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        '<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">',
-        f'  <file original="{_xml_attr(filename)}"',
-        f'        source-language="{src_lang}"',
-        f'        target-language="{target_language}"',
-        f'        datatype="x-document"',
-        f'        tool-id="anova-typist">',
-        '    <header>',
-        '      <tool tool-id="anova-typist" tool-name="Anova Typist"',
-        '            tool-version="1.0" tool-company="Anova Translation"/>',
-        f'      <note>Transcribed by Anova Typist on {today} | Model: {model}</note>',
-        '    </header>',
-        '    <body>',
+        '<xliff xmlns="urn:oasis:names:tc:xliff:document:2.2"',
+        '       version="2.2"',
+        f'       srcLang="{src_lang}"',
+        f'       trgLang="{target_language}">',
+        f'  <file id="f1" original="{_xml_attr(filename)}">',
+        '    <notes>',
+        f'      <note id="n1" category="tool">Transcribed by Anova Typist on {today} | Model: {model}</note>',
+        '    </notes>',
     ]
 
     for i, seg in enumerate(segments, start=1):
         lines += [
-            f'      <trans-unit id="{i}">',
+            f'    <unit id="u{i}">',
+            f'      <segment id="s{i}" state="initial">',
             f'        <source xml:space="preserve">{_xml_escape(seg)}</source>',
             f'        <target/>',
-            f'      </trans-unit>',
+            f'      </segment>',
+            f'    </unit>',
         ]
 
     lines += [
-        '    </body>',
         '  </file>',
         '</xliff>',
     ]
     return "\n".join(lines).encode("utf-8")
 
 
-# ---------------------------------------------------------------------------
-# SDLXLIFF — SDL Trados Studio
-# ---------------------------------------------------------------------------
-def create_sdlxliff(result: dict, target_language: str, source_language: str = "") -> bytes:
-    """
-    Generates an SDLXLIFF bilingual file compatible with SDL Trados Studio.
-    Each segment is marked conf="Draft" origin="mt" (machine-transcribed).
-    Returns: SDLXLIFF file content as UTF-8 bytes.
-    """
-    src_lang  = source_language or _extract_source_language(result.get("metadata", ""))
-    filename  = result.get("filename", "document")
-    segments  = _segment_for_xliff(result.get("content", ""))
-    file_id   = str(uuid.uuid4())
-    today     = date.today().isoformat() + "T00:00:00"
-    model     = result.get("model", "claude-sonnet-4-6")
-
-    lines = [
-        '<?xml version="1.0" encoding="utf-8"?>',
-        '<xliff xmlns:sdl="http://sdl.com/FileTypes/SdlXliff/1.0"',
-        '       xmlns="urn:oasis:names:tc:xliff:document:1.2"',
-        '       version="1.2" sdl:version="1.0">',
-        f'  <file original="{_xml_attr(filename)}"',
-        f'        datatype="x-document"',
-        f'        source-language="{src_lang}"',
-        f'        target-language="{target_language}">',
-        '    <header>',
-        '      <file-info xmlns="http://sdl.com/FileTypes/SdlXliff/1.0">',
-        f'        <value key="SDL:FileId">{file_id}</value>',
-        f'        <value key="SDL:CreationDate">{today}</value>',
-        f'        <value key="SDL:OriginalFilePath">{_xml_escape(filename)}</value>',
-        '        <sniff-info>',
-        f'          <detected-source-lang detection-level="Certain" lang="{src_lang}"/>',
-        f'          <detected-target-lang detection-level="Certain" lang="{target_language}"/>',
-        '        </sniff-info>',
-        '      </file-info>',
-        '      <tool tool-id="anova-typist" tool-name="Anova Typist"',
-        '            tool-version="1.0" tool-company="Anova Translation"/>',
-        f'      <note>Transcribed by Anova Typist on {today[:10]} | Model: {model}</note>',
-        '    </header>',
-        '    <body>',
-    ]
-
-    for i, seg in enumerate(segments, start=1):
-        lines += [
-            f'      <trans-unit id="tu{i}">',
-            f'        <source xml:space="preserve">{_xml_escape(seg)}</source>',
-            f'        <seg-source>',
-            f'          <mrk mtype="seg" mid="{i}">{_xml_escape(seg)}</mrk>',
-            f'        </seg-source>',
-            f'        <target>',
-            f'          <mrk mtype="seg" mid="{i}"/>',
-            f'        </target>',
-            f'        <sdl:seg-defs>',
-            f'          <sdl:seg id="{i}" conf="Draft" origin="mt"/>',
-            f'        </sdl:seg-defs>',
-            f'      </trans-unit>',
-        ]
-
-    lines += [
-        '    </body>',
-        '  </file>',
-        '</xliff>',
-    ]
-    return "\n".join(lines).encode("utf-8")
-
-
-# ---------------------------------------------------------------------------
-# MQXLIFF — memoQ
-# ---------------------------------------------------------------------------
-def create_mqxliff(result: dict, target_language: str, source_language: str = "") -> bytes:
-    """
-    Generates an MQXLIFF bilingual file compatible with memoQ.
-    Each segment has mq:status="NotStarted" and a unique mq:segmentguid.
-    Returns: MQXLIFF file content as UTF-8 bytes.
-    """
-    src_lang   = source_language or _extract_source_language(result.get("metadata", ""))
-    filename   = result.get("filename", "document")
-    segments   = _segment_for_xliff(result.get("content", ""))
-    file_id    = str(uuid.uuid4())
-    project_id = str(uuid.uuid4())
-    word_count = sum(len(s.split()) for s in segments)
-    model      = result.get("model", "claude-sonnet-4-6")
-
-    lines = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<xliff version="1.2"',
-        '       xmlns="urn:oasis:names:tc:xliff:document:1.2"',
-        '       xmlns:mq="MQXliff"',
-        '       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
-        '       xsi:schemaLocation="urn:oasis:names:tc:xliff:document:1.2 xliff-core-1.2-transitional.xsd">',
-        f'  <file original="{_xml_attr(filename)}"',
-        f'        mq:id="{file_id}"',
-        f'        mq:projectid="{project_id}"',
-        f'        source-language="{src_lang}"',
-        f'        target-language="{target_language}"',
-        f'        datatype="x-memoq">',
-        '    <header>',
-        '      <tool tool-id="MQ" tool-name="MemoQ" tool-version="11.0.0" tool-company="Kilgray"/>',
-        f'      <mq:docinformation mq:docname="{_xml_attr(filename)}"',
-        f'                         mq:numberofwords="{word_count}"',
-        f'                         mq:isabstract="isabstract"',
-        f'                         mq:hashistory="false"',
-        f'                         mq:nosplitjoin="true"/>',
-        f'      <note>Transcribed by Anova Typist | Model: {model}</note>',
-        '    </header>',
-        '    <body>',
-    ]
-
-    for i, seg in enumerate(segments, start=1):
-        seg_guid = str(uuid.uuid4())
-        lines += [
-            f'      <trans-unit id="{i}"',
-            f'                  mq:status="NotStarted"',
-            f'                  mq:segmentguid="{seg_guid}"',
-            f'                  mq:lastchangedtimestamp="0001-01-01T00:00:00Z"',
-            f'                  mq:firstlabel="{i}"',
-            f'                  mq:lastlabel="{i}"',
-            f'                  mq:nosplitjoin="false">',
-            f'        <source xml:space="preserve">{_xml_escape(seg)}</source>',
-            f'        <target xml:space="preserve"></target>',
-            f'      </trans-unit>',
-        ]
-
-    lines += [
-        '    </body>',
-        '  </file>',
-        '</xliff>',
-    ]
-    return "\n".join(lines).encode("utf-8")

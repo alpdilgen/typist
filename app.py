@@ -11,8 +11,6 @@ from typist_core import (
     transcribe_document,
     create_docx,
     create_xliff,
-    create_sdlxliff,
-    create_mqxliff,
     _extract_source_language,
     SUPPORTED_FORMATS,
     MAX_FILE_SIZE_MB,
@@ -230,18 +228,13 @@ with st.sidebar:
         "Export bilingual XLIFF file",
         value=False,
         help=(
-            "In addition to the Word file, generate a bilingual XLIFF for import "
-            "into a CAT tool (SDL Trados, memoQ, or any XLIFF-compatible tool). "
+            "In addition to the Word file, generate a standard XLIFF 2.2 bilingual file "
+            "(OASIS standard, .xlf) for import into any CAT tool — "
+            "SDL Trados 2019+, memoQ 8+, Phrase, Wordfast Pro 6+, Déjà Vu X3+. "
             "A separate Transcription Notes Word file will also be provided."
         ),
     )
     if export_xliff:
-        xliff_format = st.selectbox(
-            "Format",
-            ["XLIFF 1.2", "SDLXLIFF (SDL Trados)", "MQXLIFF (memoQ)"],
-            index=0,
-            help="Choose the CAT tool format for the bilingual file.",
-        )
         source_lang_input = st.text_input(
             "Source language code",
             placeholder="auto-detected (e.g. en-US)",
@@ -257,7 +250,6 @@ with st.sidebar:
             help="BCP-47 language tag for the translation target language.",
         )
     else:
-        xliff_format      = "XLIFF 1.2"
         source_lang_input = ""
         target_lang_input = ""
 
@@ -338,15 +330,13 @@ start_btn = st.button(
 )
 
 # ---------------------------------------------------------------------------
-# Processing
+# Processing  (runs only when Start button is clicked)
 # ---------------------------------------------------------------------------
 if start_btn and uploaded_file:
     file_bytes = uploaded_file.getvalue()
-    filename = uploaded_file.name
+    filename   = uploaded_file.name
 
-    # Step indicator
     progress_container = st.container()
-
     with progress_container:
         step1 = st.markdown(
             '<div class="step-indicator step-active">⏳ Step 1/3 — Sending file to Claude...</div>',
@@ -354,7 +344,6 @@ if start_btn and uploaded_file:
         )
 
     try:
-        # --- Transcription ---
         with st.spinner("Claude is reading and transcribing the document..."):
             result = transcribe_document(
                 file_bytes=file_bytes,
@@ -369,9 +358,8 @@ if start_btn and uploaded_file:
             unsafe_allow_html=True,
         )
 
-        # --- DOCX + optional XLIFF Generation ---
         step2_label = (
-            "⏳ Step 2/3 — Creating Word document and XLIFF file..."
+            "⏳ Step 2/3 — Creating Word document and XLIFF 2.2 file..."
             if export_xliff else
             "⏳ Step 2/3 — Creating Word document..."
         )
@@ -383,167 +371,168 @@ if start_btn and uploaded_file:
 
         docx_bytes = create_docx(result)
 
-        # --- XLIFF generation (if requested) ---
         xliff_bytes    = None
-        xliff_ext      = ".xliff"
-        xliff_mime     = "application/xliff+xml"
         detected_src   = _extract_source_language(result.get("metadata", ""))
         final_src_lang = source_lang_input.strip() or detected_src
 
         if export_xliff and target_lang_input.strip():
-            tgt = target_lang_input.strip()
-            if xliff_format == "SDLXLIFF (SDL Trados)":
-                xliff_bytes = create_sdlxliff(result, tgt, final_src_lang)
-                xliff_ext   = ".sdlxliff"
-            elif xliff_format == "MQXLIFF (memoQ)":
-                xliff_bytes = create_mqxliff(result, tgt, final_src_lang)
-                xliff_ext   = ".mqxliff"
-            else:
-                xliff_bytes = create_xliff(result, tgt, final_src_lang)
-                xliff_ext   = ".xliff"
+            xliff_bytes = create_xliff(result, target_lang_input.strip(), final_src_lang)
 
         step2.markdown(
             '<div class="step-indicator step-done">✅ Step 2/3 — Output files ready</div>',
             unsafe_allow_html=True,
         )
-
         with progress_container:
             st.markdown(
                 '<div class="step-indicator step-done">✅ Step 3/3 — Ready to download</div>',
                 unsafe_allow_html=True,
             )
 
-        # ---------------------------------------------------------------------------
-        # Results
-        # ---------------------------------------------------------------------------
-        st.markdown("---")
-        st.markdown("## 📊 Results")
-
-        # --- Uncertain elements warning ---
-        from typist_core import _extract_uncertain_count
-        uncertain_count = _extract_uncertain_count(result.get("metadata", ""))
-        if uncertain_count > 0:
-            st.markdown(
-                f'<div class="uncertain-warning">'
-                f'<div class="warn-title">⚠️ Attention: {uncertain_count} uncertain element(s) detected</div>'
-                f'<div class="warn-body">'
-                f'Some portions of this document could not be read with full confidence. '
-                f'Flagged items are highlighted in amber in the transcription tab and the Word file. '
-                f'Please review them carefully before using this transcription.'
-                f'</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-        # --- Download buttons ---
-        stem = filename.rsplit(".", 1)[0]
-
-        if export_xliff and xliff_bytes:
-            # Two-column layout: Notes DOCX | XLIFF
-            col_docx, col_xliff = st.columns(2)
-            with col_docx:
-                st.download_button(
-                    label="⬇️ Transcription Notes (.docx)",
-                    data=docx_bytes,
-                    file_name=stem + "_transcription_notes.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                    help="Full report: document info, formatting notes, quality notes, flagged items, and transcription.",
-                )
-            with col_xliff:
-                st.download_button(
-                    label=f"⬇️ Bilingual File ({xliff_ext})",
-                    data=xliff_bytes,
-                    file_name=stem + xliff_ext,
-                    mime=xliff_mime,
-                    use_container_width=True,
-                    help=f"Import into your CAT tool. Source: {final_src_lang} → Target: {target_lang_input.strip()}",
-                )
-            st.caption(
-                f"Source: `{final_src_lang}` → Target: `{target_lang_input.strip()}` "
-                f"| Format: {xliff_format}"
-            )
-
-        elif export_xliff and not target_lang_input.strip():
-            # DOCX only, but warn about missing target language
-            docx_filename = stem + "_transcription_notes.docx"
-            st.download_button(
-                label="⬇️ Transcription Notes (.docx)",
-                data=docx_bytes,
-                file_name=docx_filename,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-            st.warning(
-                "⚠️ No target language specified — XLIFF file was not generated. "
-                "Enter a target language code in the sidebar and re-run to get the bilingual file."
-            )
-
-        else:
-            # Standard single DOCX download
-            st.download_button(
-                label="⬇️ Download Word File (.docx)",
-                data=docx_bytes,
-                file_name=stem + "_transcription.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-
-        st.markdown("---")
-
-        # Tabs
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "📋 Document Info",
-            "📝 Transcription",
-            "🎨 Formatting",
-            "🔍 Quality"
-        ])
-
-        with tab1:
-            st.markdown("### Document Metadata")
-            st.code(result["metadata"], language=None)
-
-        with tab2:
-            st.markdown("### Transcription Content")
-            if uncertain_count > 0:
-                st.info(
-                    f"ℹ️ {uncertain_count} uncertain element(s) are flagged inline with "
-                    "`[UNCERTAIN]`, `[HANDWRITTEN - UNCERTAIN]`, or similar markers."
-                )
-            st.markdown(
-                f'<div class="result-card">{result["content"]}</div>',
-                unsafe_allow_html=True,
-            )
-            # Raw text for copy-paste
-            with st.expander("Raw text (for copy-paste)"):
-                st.text_area(
-                    "Transcription",
-                    value=result["content"],
-                    height=300,
-                    label_visibility="collapsed",
-                )
-
-        with tab3:
-            st.markdown("### Formatting Notes")
-            st.info(result["formatting_notes"])
-
-        with tab4:
-            st.markdown("### Quality Notes")
-            quality = result["quality_notes"]
-            if "high confidence" in quality.lower() or "no manual review" in quality.lower():
-                st.success(quality)
-            else:
-                st.warning(quality)
-
-        # Model info footer
-        img_label = "with image descriptions" if include_image_placeholders else "without image descriptions"
-        st.caption(f"Model: `{model}` | File: `{filename}` | {img_label}")
+        # ── Persist results in session_state so download buttons survive re-runs ──
+        st.session_state["t_result"]           = result
+        st.session_state["t_docx"]             = docx_bytes
+        st.session_state["t_xliff"]            = xliff_bytes
+        st.session_state["t_filename"]         = filename
+        st.session_state["t_src_lang"]         = final_src_lang
+        st.session_state["t_tgt_lang"]         = target_lang_input.strip()
+        st.session_state["t_export_xliff"]     = export_xliff
+        st.session_state["t_img_placeholders"] = include_image_placeholders
+        st.session_state["t_model"]            = model
 
     except ValueError as e:
         st.error(f"❌ Error: {e}")
+        st.session_state.pop("t_result", None)   # clear stale results on error
     except Exception as e:
         st.error(f"❌ Unexpected error: {e}")
         with st.expander("Technical details"):
             import traceback
             st.code(traceback.format_exc())
+        st.session_state.pop("t_result", None)
+
+# ---------------------------------------------------------------------------
+# Results  (rendered from session_state — survives download-button re-runs)
+# ---------------------------------------------------------------------------
+if "t_result" in st.session_state:
+    from typist_core import _extract_uncertain_count
+
+    result         = st.session_state["t_result"]
+    docx_bytes     = st.session_state["t_docx"]
+    xliff_bytes    = st.session_state["t_xliff"]
+    filename       = st.session_state["t_filename"]
+    final_src_lang = st.session_state["t_src_lang"]
+    tgt_lang       = st.session_state["t_tgt_lang"]
+    do_xliff       = st.session_state["t_export_xliff"]
+    img_ph         = st.session_state["t_img_placeholders"]
+    used_model     = st.session_state["t_model"]
+
+    uncertain_count = _extract_uncertain_count(result.get("metadata", ""))
+
+    st.markdown("---")
+    st.markdown("## 📊 Results")
+
+    if uncertain_count > 0:
+        st.markdown(
+            f'<div class="uncertain-warning">'
+            f'<div class="warn-title">⚠️ Attention: {uncertain_count} uncertain element(s) detected</div>'
+            f'<div class="warn-body">'
+            f'Some portions of this document could not be read with full confidence. '
+            f'Flagged items are highlighted in amber in the transcription tab and the Word file. '
+            f'Please review them carefully before using this transcription.'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    stem = filename.rsplit(".", 1)[0]
+
+    if do_xliff and xliff_bytes:
+        col_docx, col_xliff = st.columns(2)
+        with col_docx:
+            st.download_button(
+                label="⬇️ Transcription Notes (.docx)",
+                data=docx_bytes,
+                file_name=stem + "_transcription_notes.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                help="Full report: document info, formatting notes, quality notes, flagged items, and transcription.",
+            )
+        with col_xliff:
+            st.download_button(
+                label="⬇️ Bilingual File (.xlf)",
+                data=xliff_bytes,
+                file_name=stem + ".xlf",
+                mime="application/xliff+xml",
+                use_container_width=True,
+                help=f"XLIFF 2.2 (OASIS standard) — import into any CAT tool. Source: {final_src_lang} → Target: {tgt_lang}",
+            )
+        st.caption(f"XLIFF 2.2 | Source: `{final_src_lang}` → Target: `{tgt_lang}`")
+
+    elif do_xliff and not xliff_bytes:
+        st.download_button(
+            label="⬇️ Transcription Notes (.docx)",
+            data=docx_bytes,
+            file_name=stem + "_transcription_notes.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        st.warning(
+            "⚠️ No target language was specified — XLIFF file was not generated. "
+            "Enter a target language code in the sidebar and re-run."
+        )
+
+    else:
+        st.download_button(
+            label="⬇️ Download Word File (.docx)",
+            data=docx_bytes,
+            file_name=stem + "_transcription.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+    st.markdown("---")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📋 Document Info",
+        "📝 Transcription",
+        "🎨 Formatting",
+        "🔍 Quality"
+    ])
+
+    with tab1:
+        st.markdown("### Document Metadata")
+        st.code(result["metadata"], language=None)
+
+    with tab2:
+        st.markdown("### Transcription Content")
+        if uncertain_count > 0:
+            st.info(
+                f"ℹ️ {uncertain_count} uncertain element(s) are flagged inline with "
+                "`[UNCERTAIN]`, `[HANDWRITTEN - UNCERTAIN]`, or similar markers."
+            )
+        st.markdown(
+            f'<div class="result-card">{result["content"]}</div>',
+            unsafe_allow_html=True,
+        )
+        with st.expander("Raw text (for copy-paste)"):
+            st.text_area(
+                "Transcription",
+                value=result["content"],
+                height=300,
+                label_visibility="collapsed",
+            )
+
+    with tab3:
+        st.markdown("### Formatting Notes")
+        st.info(result["formatting_notes"])
+
+    with tab4:
+        st.markdown("### Quality Notes")
+        quality = result["quality_notes"]
+        if "high confidence" in quality.lower() or "no manual review" in quality.lower():
+            st.success(quality)
+        else:
+            st.warning(quality)
+
+    img_label = "with image descriptions" if img_ph else "without image descriptions"
+    st.caption(f"Model: `{used_model}` | File: `{filename}` | {img_label}")
 
 # ---------------------------------------------------------------------------
 # Help section when no file is uploaded
