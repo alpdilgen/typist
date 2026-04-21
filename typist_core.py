@@ -825,6 +825,145 @@ def _blocks_for_xliff(content: str) -> list:
     return blocks
 
 
+# ---------------------------------------------------------------------------
+# Bilingual editor helpers
+# ---------------------------------------------------------------------------
+
+def get_segments_for_editor(content: str) -> list:
+    """
+    Returns a flat list of segments for the bilingual editor, each including
+    the page number derived from ---PAGE BREAK--- markers in the transcription.
+
+    Each segment dict:
+        id         : 'b{block_idx}-s{sent_idx}'
+        page       : 1-based page number
+        block_idx  : global block index
+        sent_idx   : sentence index within block
+        type       : 'paragraph' | 'heading' | 'list' | 'table'
+        text       : segment text
+    """
+    blocks      = []
+    current_page = 1
+    para_lines: list = []
+    para_page   = 1
+
+    def flush_para():
+        if para_lines:
+            full_text = " ".join(para_lines).strip()
+            if len(full_text) > 1:
+                blocks.append({"type": "paragraph",
+                                "sentences": _split_sentences(full_text),
+                                "page": para_page})
+            para_lines.clear()
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        if not stripped:
+            flush_para()
+            continue
+
+        if "---PAGE BREAK---" in stripped or re.match(r"^\[PAGE", stripped, re.IGNORECASE):
+            flush_para()
+            current_page += 1
+            continue
+
+        if re.match(r"^\|[\s\-|:]+\|$", stripped):        # table separator
+            continue
+
+        if stripped.startswith("|"):                        # table row
+            flush_para()
+            cells    = [c.strip() for c in stripped.strip("|").split("|")]
+            row_text = " | ".join(c for c in cells if c)
+            if len(row_text) > 1:
+                blocks.append({"type": "table", "sentences": [row_text], "page": current_page})
+            continue
+
+        if stripped.startswith("#"):                        # heading
+            flush_para()
+            heading_text = re.sub(r"^#+\s*", "", stripped)
+            if len(heading_text) > 1:
+                blocks.append({"type": "heading", "sentences": [heading_text], "page": current_page})
+            continue
+
+        if re.match(r"^(\d+\.|[-*•])\s+", stripped):       # list item
+            flush_para()
+            if len(stripped) > 1:
+                blocks.append({"type": "list", "sentences": [stripped], "page": current_page})
+            continue
+
+        para_lines.append(stripped)
+        para_page = current_page
+
+    flush_para()
+
+    segments = []
+    for idx, block in enumerate(blocks):
+        for si, sentence in enumerate(block["sentences"]):
+            if sentence.strip():
+                segments.append({
+                    "id":        f"b{idx}-s{si}",
+                    "page":      block["page"],
+                    "block_idx": idx,
+                    "sent_idx":  si,
+                    "type":      block["type"],
+                    "text":      sentence,
+                })
+    return segments
+
+
+def reconstruct_content_from_segments(segments: list) -> str:
+    """
+    Reassembles edited segments back into markdown-formatted content,
+    re-inserting ---PAGE BREAK--- markers where the page number changes.
+
+    Used by the bilingual editor's Save & Export to regenerate DOCX/XLIFF
+    from corrected segment texts.
+    """
+    blocks_data: dict = {}
+    for seg in segments:
+        bi = seg["block_idx"]
+        if bi not in blocks_data:
+            blocks_data[bi] = {
+                "type":      seg["type"],
+                "page":      seg["page"],
+                "sentences": {},
+            }
+        blocks_data[bi]["sentences"][seg["sent_idx"]] = seg["text"]
+
+    lines      = []
+    prev_page  = 1
+
+    for bi in sorted(blocks_data.keys()):
+        block      = blocks_data[bi]
+        block_type = block["type"]
+        block_page = block["page"]
+        sents      = [block["sentences"][si] for si in sorted(block["sentences"].keys())]
+        full_text  = " ".join(s for s in sents if s.strip())
+
+        if not full_text.strip():
+            continue
+
+        # Insert page break(s) when page changes
+        if block_page > prev_page:
+            for _ in range(block_page - prev_page):
+                lines.append("---PAGE BREAK---")
+            prev_page = block_page
+
+        if block_type == "heading":
+            lines.append(f"# {full_text}")
+        elif block_type == "list":
+            lines.append(full_text)
+        elif block_type == "table":
+            lines.append(f"| {full_text} |")
+        else:
+            lines.append(full_text)
+
+        lines.append("")   # blank line between blocks
+
+    return "\n".join(lines)
+
+
 # Keep old helper for any internal callers
 def _segment_for_xliff(content: str) -> list:
     """Flat list of segment strings — kept for backwards compatibility."""

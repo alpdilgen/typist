@@ -4,6 +4,7 @@ app.py — Anova Typist Streamlit Interface
 Scanned document → Claude Vision transcription → Word (.docx) download
 """
 
+import io
 import os
 import streamlit as st
 from dotenv import load_dotenv
@@ -12,9 +13,35 @@ from typist_core import (
     create_docx,
     create_xliff,
     apply_xliff_to_docx,
+    get_segments_for_editor,
+    reconstruct_content_from_segments,
     SUPPORTED_FORMATS,
     MAX_FILE_SIZE_MB,
 )
+
+
+# ---------------------------------------------------------------------------
+# PDF page renderer (requires pypdfium2 — optional, graceful fallback)
+# ---------------------------------------------------------------------------
+def _render_pdf_page(pdf_bytes: bytes, page_idx: int):
+    """
+    Renders a single PDF page to PNG bytes.
+    Returns None if pypdfium2 is not installed or an error occurs.
+    """
+    try:
+        import pypdfium2 as pdfium
+        pdf    = pdfium.PdfDocument(pdf_bytes)
+        if page_idx < 0 or page_idx >= len(pdf):
+            return None
+        page   = pdf[page_idx]
+        bitmap = page.render(scale=2.0)
+        pil_img = bitmap.to_pil()
+        buf = io.BytesIO()
+        pil_img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf.read()
+    except Exception:
+        return None
 
 load_dotenv()
 
@@ -478,6 +505,15 @@ if start_btn and uploaded_file:
 
         docx_bytes = create_docx(result)
 
+        # --- Initialise bilingual editor state ---
+        editor_segments = get_segments_for_editor(result["content"])
+        st.session_state["t_segments"]    = editor_segments
+        st.session_state["t_seg_texts"]   = {s["id"]: s["text"] for s in editor_segments}
+        st.session_state["t_total_pages"] = max((s["page"] for s in editor_segments), default=1)
+        st.session_state["t_editor_page"] = 1
+        st.session_state["t_file_bytes"]  = file_bytes
+        st.session_state["t_file_ext"]    = filename.lower().rsplit(".", 1)[-1]
+
         xliff_bytes    = None
         src_lang       = source_lang_input.strip()
         tgt_lang       = target_lang_input.strip()
@@ -648,6 +684,176 @@ if "t_result" in st.session_state:
 
     img_label = "with image descriptions" if img_ph else "without image descriptions"
     st.caption(f"Model: `{used_model}` | File: `{filename}` | {img_label}")
+
+# ---------------------------------------------------------------------------
+# Bilingual Editor — review & correct transcription before export
+# ---------------------------------------------------------------------------
+if "t_segments" in st.session_state:
+    import pandas as pd
+
+    st.markdown("---")
+    st.markdown("## ✏️ Transcription Editor")
+    st.caption(
+        "Compare the original document (left) with the transcribed text (right). "
+        "Edit any transcription errors inline. "
+        "Click **Save & Export** to regenerate updated Word / XLIFF files."
+    )
+
+    all_segs    = st.session_state["t_segments"]
+    seg_texts   = st.session_state["t_seg_texts"]
+    total_pages = st.session_state.get("t_total_pages", 1)
+    file_bytes_ed = st.session_state.get("t_file_bytes")
+    file_ext_ed   = st.session_state.get("t_file_ext", "")
+
+    if "t_editor_page" not in st.session_state:
+        st.session_state["t_editor_page"] = 1
+
+    # ── Page navigation (multi-page PDFs only) ──────────────────────────────
+    if total_pages > 1:
+        def _go_prev():
+            st.session_state["t_editor_page"] = max(1, st.session_state["t_editor_page"] - 1)
+        def _go_next():
+            st.session_state["t_editor_page"] = min(
+                total_pages, st.session_state["t_editor_page"] + 1
+            )
+
+        nav1, nav2, nav3 = st.columns([1, 2, 1])
+        with nav1:
+            st.button(
+                "← Previous Page",
+                on_click=_go_prev,
+                disabled=(st.session_state["t_editor_page"] == 1),
+                use_container_width=True,
+                key="ed_prev",
+            )
+        with nav2:
+            cp = st.session_state["t_editor_page"]
+            st.markdown(
+                f"<p style='text-align:center;font-weight:600;padding-top:6px'>"
+                f"Page {cp} of {total_pages}</p>",
+                unsafe_allow_html=True,
+            )
+        with nav3:
+            st.button(
+                "Next Page →",
+                on_click=_go_next,
+                disabled=(st.session_state["t_editor_page"] == total_pages),
+                use_container_width=True,
+                key="ed_next",
+            )
+
+    current_page = st.session_state["t_editor_page"]
+
+    # ── Two-column layout ───────────────────────────────────────────────────
+    left_panel, right_panel = st.columns(2)
+
+    with left_panel:
+        st.markdown("**📄 Source Document**")
+        if file_bytes_ed:
+            if file_ext_ed in ("jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif"):
+                st.image(file_bytes_ed, use_column_width=True)
+            elif file_ext_ed == "pdf":
+                rendered = _render_pdf_page(file_bytes_ed, current_page - 1)
+                if rendered:
+                    st.image(rendered, use_column_width=True,
+                             caption=f"Page {current_page} of {total_pages}")
+                else:
+                    st.info(
+                        f"📄 PDF page {current_page} — install `pypdfium2` to enable "
+                        "page preview (`pip install pypdfium2`)."
+                    )
+        else:
+            st.info("Source file not available in this session.")
+
+    with right_panel:
+        st.markdown("**✏️ Transcription (editable)**")
+
+        page_segs = [s for s in all_segs if s["page"] == current_page]
+
+        if page_segs:
+            _type_abbr = {"paragraph": "PAR", "heading": "HDG", "list": "LST", "table": "TBL"}
+            df_rows = [
+                {
+                    "id":            seg["id"],
+                    "Type":          _type_abbr.get(seg["type"], seg["type"][:3].upper()),
+                    "Transcription": seg_texts.get(seg["id"], seg["text"]),
+                }
+                for seg in page_segs
+            ]
+            df = pd.DataFrame(df_rows)
+
+            edited_df = st.data_editor(
+                df,
+                column_config={
+                    "id":   None,   # hidden — used only for state tracking
+                    "Type": st.column_config.TextColumn(
+                        "Type", disabled=True, width=60,
+                        help="PAR = paragraph · HDG = heading · LST = list · TBL = table",
+                    ),
+                    "Transcription": st.column_config.TextColumn(
+                        "Transcription", width="large",
+                        help="Edit to correct OCR errors. Press Enter or click another row to confirm.",
+                    ),
+                },
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                height=560,
+                key=f"editor_p{current_page}",
+            )
+
+            # Persist edits for the current page into the master dict.
+            # This runs on every re-render, ensuring edits are saved before
+            # the user navigates away to another page.
+            for _, row in edited_df.iterrows():
+                seg_id = row["id"]
+                if seg_id in seg_texts:
+                    st.session_state["t_seg_texts"][seg_id] = row["Transcription"]
+        else:
+            st.info("No transcribed text segments for this page.")
+
+    # ── Save & Export ───────────────────────────────────────────────────────
+    st.markdown("")
+    _, save_mid, _ = st.columns([1, 2, 1])
+    with save_mid:
+        save_btn = st.button(
+            "💾 Save & Export Updated Files",
+            type="primary",
+            use_container_width=True,
+            key="save_export_btn",
+        )
+
+    if save_btn:
+        with st.spinner("Rebuilding files from edited segments…"):
+            # Build updated segment list with edited texts
+            updated_segs = [
+                dict(s, text=st.session_state["t_seg_texts"].get(s["id"], s["text"]))
+                for s in st.session_state["t_segments"]
+            ]
+            updated_content = reconstruct_content_from_segments(updated_segs)
+
+            updated_result          = dict(st.session_state["t_result"])
+            updated_result["content"] = updated_content
+
+            updated_docx = create_docx(updated_result)
+            st.session_state["t_docx"]   = updated_docx
+            st.session_state["t_result"] = updated_result  # keep in sync for tabs
+
+            if (st.session_state.get("t_export_xliff")
+                    and st.session_state.get("t_src_lang")
+                    and st.session_state.get("t_tgt_lang")):
+                updated_xliff = create_xliff(
+                    updated_result,
+                    st.session_state["t_tgt_lang"],
+                    st.session_state["t_src_lang"],
+                    docx_bytes=updated_docx,
+                )
+                st.session_state["t_xliff"] = updated_xliff
+
+        st.success(
+            "✅ Files updated from editor. "
+            "Use the **Download** buttons at the top of this page to get the corrected files."
+        )
 
 # ---------------------------------------------------------------------------
 # Apply Translation — upload translated XLIFF → get translated Word
