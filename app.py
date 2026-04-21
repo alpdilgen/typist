@@ -11,6 +11,7 @@ from typist_core import (
     transcribe_document,
     create_docx,
     create_xliff,
+    apply_xliff_to_docx,
     SUPPORTED_FORMATS,
     MAX_FILE_SIZE_MB,
 )
@@ -485,10 +486,12 @@ if start_btn and uploaded_file:
             if not src_lang or not tgt_lang:
                 st.warning(
                     "⚠️ XLIFF file was not generated — both source and target language codes are required. "
-                    "Enter them in the sidebar and re-run."
+                    "Select them in the sidebar and re-run."
                 )
             else:
-                xliff_bytes = create_xliff(result, tgt_lang, src_lang)
+                # Pass docx_bytes as skeleton → enables round-trip apply-back
+                xliff_bytes = create_xliff(result, tgt_lang, src_lang,
+                                           docx_bytes=docx_bytes)
 
         step2.markdown(
             '<div class="step-indicator step-done">✅ Step 2/3 — Output files ready</div>',
@@ -645,6 +648,48 @@ if "t_result" in st.session_state:
 
     img_label = "with image descriptions" if img_ph else "without image descriptions"
     st.caption(f"Model: `{used_model}` | File: `{filename}` | {img_label}")
+
+# ---------------------------------------------------------------------------
+# Apply Translation — upload translated XLIFF → get translated Word
+# ---------------------------------------------------------------------------
+st.markdown("---")
+st.markdown("### 🔄 Apply Translation")
+st.caption(
+    "After translating the XLIFF file in your CAT tool, upload it here "
+    "to generate the translated Word document."
+)
+
+translated_xliff = st.file_uploader(
+    "Upload translated XLIFF (.xlf)",
+    type=["xlf", "xliff"],
+    key="apply_xliff_upload",
+    help="Upload the translated .xlf file exported from your CAT tool.",
+)
+
+if translated_xliff:
+    apply_btn = st.button("🔄 Generate Translated Word Document", type="primary",
+                          use_container_width=True)
+    if apply_btn:
+        try:
+            with st.spinner("Applying translations to Word document…"):
+                translated_docx = apply_xliff_to_docx(translated_xliff.getvalue())
+
+            xlf_stem = translated_xliff.name.rsplit(".", 1)[0]
+            st.download_button(
+                label="⬇️ Download Translated Word File (.docx)",
+                data=translated_docx,
+                file_name=xlf_stem + "_translated.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+            )
+            st.success("✅ Translations applied successfully.")
+        except ValueError as e:
+            st.error(f"❌ {e}")
+        except Exception as e:
+            st.error(f"❌ Unexpected error: {e}")
+            with st.expander("Technical details"):
+                import traceback
+                st.code(traceback.format_exc())
 
 # ---------------------------------------------------------------------------
 # Help section when no file is uploaded

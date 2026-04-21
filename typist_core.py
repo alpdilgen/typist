@@ -710,76 +710,126 @@ def _extract_source_language(metadata: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# XLIFF segmenter
+# SRX-inspired sentence splitter
+# Ref: https://www.gala-global.org/srx-10
+# XLIFF spec defers segmentation to external standards (SRX / UAX #29).
 # ---------------------------------------------------------------------------
-def _segment_for_xliff(content: str) -> list:
-    """
-    Splits transcription content into translatable segments for XLIFF export.
 
-    Rules:
-    - Each non-empty paragraph → one segment
-    - Heading lines (#, ##, ###) → one segment each (markdown stripped)
-    - Table content rows → one segment per row (pipe format cleaned)
-    - Table separator rows (|---|) → skipped
-    - Page break markers → skipped
-    - List items → one segment each
-    - Uncertain/flag markers are preserved inside segment text
+# Abbreviations that should NOT trigger a sentence break
+_ABBREV_RE = re.compile(
+    r'\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|Fig|Eq|No|Tab|Vol|Ref|'
+    r'Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec|'
+    r'Mon|Tue|Wed|Thu|Fri|Sat|Sun|Corp|Ltd|Inc|Co)\.',
+    re.IGNORECASE,
+)
+
+# Break rule: sentence-ending .!? followed by whitespace + uppercase / quote / bracket
+_BREAK_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z"\u201C\u2018\(\[])')
+
+
+def _split_sentences(text: str) -> list:
     """
-    segments = []
-    current_para = []
+    SRX-inspired sentence splitter for CAT tool segmentation.
+
+    Break rules  : period / exclamation / question + whitespace + uppercase
+    Exception rules: common abbreviations, decimal numbers, initials
+    Short text (<60 chars): returned as-is (single sentence likely).
+    """
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) < 60:
+        return [text]
+
+    _PH = "⊘"   # placeholder for masked periods (safe Unicode, never in normal text)
+
+    # Mask abbreviation periods to prevent false breaks
+    masked = _ABBREV_RE.sub(lambda m: m.group().replace(".", _PH), text)
+    # Mask decimal numbers  (3.14, 1,500.00)
+    masked = re.sub(r"(\d)\.(\d)", lambda m: m.group(1) + _PH + m.group(2), masked)
+    # Mask initials:  A. B. Smith
+    masked = re.sub(r"\b([A-Z])\.\s+(?=[A-Z])", lambda m: m.group(1) + _PH + " ", masked)
+    # Mask ellipsis  (…  or ...)
+    masked = masked.replace("...", _PH * 3)
+
+    parts = _BREAK_RE.split(masked)
+    return [p.replace(_PH, ".").strip() for p in parts if p.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Block extractor + sentence-level segmenter
+# Returns list of dicts: {block_idx, type, sentences}
+# type: 'paragraph' | 'heading' | 'list' | 'table'
+# IDs in XLIFF: b{block_idx}-s{sent_idx}  →  used for apply-back
+# ---------------------------------------------------------------------------
+
+def _blocks_for_xliff(content: str) -> list:
+    """
+    Parses markdown transcription into translatable blocks with sentence splitting.
+
+    - Headings, list items, table cells → single segment each (already short)
+    - Regular paragraphs              → split into sentences via SRX rules
+    """
+    blocks = []
+    current_para_lines: list = []
 
     def flush_para():
-        if current_para:
-            segments.append(" ".join(current_para))
-            current_para.clear()
+        if current_para_lines:
+            full_text = " ".join(current_para_lines).strip()
+            if len(full_text) > 1:
+                blocks.append({"type": "paragraph", "sentences": _split_sentences(full_text)})
+            current_para_lines.clear()
 
     for line in content.splitlines():
         stripped = line.strip()
 
-        # Skip empties → flush accumulated paragraph
         if not stripped:
             flush_para()
             continue
 
-        # Skip page break markers
         if "---PAGE BREAK---" in stripped or re.match(r"^\[PAGE", stripped, re.IGNORECASE):
             flush_para()
             continue
 
-        # Skip table separator rows
-        if re.match(r"^\|[\s\-|:]+\|$", stripped):
+        if re.match(r"^\|[\s\-|:]+\|$", stripped):   # table separator
             continue
 
-        # Table content rows
-        if stripped.startswith("|"):
+        if stripped.startswith("|"):                   # table row
             flush_para()
             cells = [c.strip() for c in stripped.strip("|").split("|")]
             row_text = " | ".join(c for c in cells if c)
-            if row_text:
-                segments.append(row_text)
+            if len(row_text) > 1:
+                blocks.append({"type": "table", "sentences": [row_text]})
             continue
 
-        # Heading lines
-        if stripped.startswith("#"):
+        if stripped.startswith("#"):                   # heading
             flush_para()
             heading_text = re.sub(r"^#+\s*", "", stripped)
-            if heading_text:
-                segments.append(heading_text)
+            if len(heading_text) > 1:
+                blocks.append({"type": "heading", "sentences": [heading_text]})
             continue
 
-        # List items
-        if re.match(r"^(\d+\.|[-*•])\s+", stripped):
+        if re.match(r"^(\d+\.|[-*•])\s+", stripped):  # list item
             flush_para()
-            segments.append(stripped)
+            if len(stripped) > 1:
+                blocks.append({"type": "list", "sentences": [stripped]})
             continue
 
-        # Regular text — accumulate
-        current_para.append(stripped)
+        current_para_lines.append(stripped)
 
     flush_para()
 
-    # Remove empty or single-character leftovers
-    return [s for s in segments if len(s.strip()) > 1]
+    for idx, block in enumerate(blocks):
+        block["block_idx"] = idx
+
+    return blocks
+
+
+# Keep old helper for any internal callers
+def _segment_for_xliff(content: str) -> list:
+    """Flat list of segment strings — kept for backwards compatibility."""
+    blocks = _blocks_for_xliff(content)
+    return [s for b in blocks for s in b["sentences"] if len(s.strip()) > 1]
 
 
 # ---------------------------------------------------------------------------
@@ -788,24 +838,30 @@ def _segment_for_xliff(content: str) -> list:
 # Compatible with ALL major CAT tools: SDL Trados, memoQ, Phrase, Wordfast,
 #   Déjà Vu, OmegaT, Memsource, MateCat, and any XLIFF-capable tool.
 # ---------------------------------------------------------------------------
-def create_xliff(result: dict, target_language: str, source_language: str = "") -> bytes:
+def create_xliff(result: dict, target_language: str, source_language: str = "",
+                 docx_bytes: bytes = None) -> bytes:
     """
-    Generates a standard XLIFF 1.2 bilingual file from transcription result.
+    Generates a standard XLIFF 1.2 bilingual file with sentence-level segmentation.
 
-    XLIFF 1.2 structure:
-      - Namespace: urn:oasis:names:tc:xliff:document:1.2
-      - source-language / target-language on <file> element
-      - <trans-unit> inside <body>
-      - <source> only (no <target>) = "needs translation" in all CAT tools
-      - File extension: .xlf
+    Segmentation:
+      - Headings, list items, table rows → single segment
+      - Regular paragraphs → split into sentences (SRX-inspired rules)
+      - Segment IDs: b{block_idx}-s{sent_idx}  →  used by apply_xliff_to_docx()
 
-    source_language: BCP-47 code (e.g. 'en-US'). Auto-detected if empty.
-    target_language: BCP-47 code (e.g. 'tr-TR').
+    Skeleton:
+      - If docx_bytes provided, the Word document is embedded as base64 skeleton.
+      - This enables CAT tools and apply_xliff_to_docx() to reconstruct the
+        translated Word document after translation is complete.
+
+    source_language: BCP-47 code (e.g. 'en-US'). Required.
+    target_language: BCP-47 code (e.g. 'tr-TR'). Required.
+    docx_bytes: Word document bytes to embed as skeleton (optional but recommended).
     Returns: XLIFF 1.2 file content as UTF-8 bytes.
     """
-    src_lang = source_language or _extract_source_language(result.get("metadata", ""))
+    import base64 as _b64
+
     filename = result.get("filename", "document")
-    segments = _segment_for_xliff(result.get("content", ""))
+    blocks   = _blocks_for_xliff(result.get("content", ""))
     today    = date.today().isoformat()
     model    = result.get("model", "claude-sonnet-4-6")
 
@@ -813,10 +869,21 @@ def create_xliff(result: dict, target_language: str, source_language: str = "") 
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">',
         f'  <file original="{_xml_attr(filename)}"',
-        f'        source-language="{src_lang}"',
+        f'        source-language="{source_language}"',
         f'        target-language="{target_language}"',
         f'        datatype="plaintext">',
         '    <header>',
+    ]
+
+    # Embed Word document as skeleton for round-trip apply-back
+    if docx_bytes:
+        b64 = _b64.b64encode(docx_bytes).decode("ascii")
+        lines += ['      <skl>', '        <internal-file form="base64">']
+        for i in range(0, len(b64), 76):          # RFC 2045 line length
+            lines.append("        " + b64[i:i + 76])
+        lines += ['        </internal-file>', '      </skl>']
+
+    lines += [
         '      <tool tool-id="anova-typist" tool-name="Anova Typist"',
         '            tool-version="1.0" tool-company="Anova Translation"/>',
         f'      <note>Transcribed by Anova Typist on {today} | Model: {model}</note>',
@@ -824,14 +891,16 @@ def create_xliff(result: dict, target_language: str, source_language: str = "") 
         '    <body>',
     ]
 
-    for i, seg in enumerate(segments, start=1):
-        # Omit <target> entirely — in XLIFF 1.2 this means "needs translation".
-        # An empty <target/> or <target state="new"/> can confuse some importers.
-        lines += [
-            f'      <trans-unit id="{i}" xml:space="preserve">',
-            f'        <source>{_xml_escape(seg)}</source>',
-            f'      </trans-unit>',
-        ]
+    for block in blocks:
+        bi = block["block_idx"]
+        for si, sentence in enumerate(block["sentences"]):
+            if not sentence.strip():
+                continue
+            lines += [
+                f'      <trans-unit id="b{bi}-s{si}" xml:space="preserve">',
+                f'        <source>{_xml_escape(sentence)}</source>',
+                f'      </trans-unit>',
+            ]
 
     lines += [
         '    </body>',
@@ -839,5 +908,104 @@ def create_xliff(result: dict, target_language: str, source_language: str = "") 
         '</xliff>',
     ]
     return "\n".join(lines).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Apply translated XLIFF back to the embedded Word skeleton
+# ---------------------------------------------------------------------------
+
+def apply_xliff_to_docx(xliff_bytes: bytes) -> bytes:
+    """
+    Applies translated segments from a completed XLIFF back to the embedded
+    Word skeleton, producing a translated .docx file.
+
+    Requirements:
+      - XLIFF must contain an <skl><internal-file form="base64"> skeleton
+        (generated by create_xliff() with docx_bytes parameter)
+      - <target> elements must be filled by the CAT tool
+      - Segment IDs must follow b{block_idx}-s{sent_idx} scheme
+
+    Returns: translated Word document as bytes.
+    """
+    import base64 as _b64
+    import xml.etree.ElementTree as ET
+
+    NS  = "urn:oasis:names:tc:xliff:document:1.2"
+    root = ET.fromstring(xliff_bytes.decode("utf-8"))
+    file_el   = root.find(f"{{{NS}}}file")
+    header_el = file_el.find(f"{{{NS}}}header")
+
+    # ── Extract skeleton ──────────────────────────────────────────────────
+    skl_el = header_el.find(f"{{{NS}}}skl")
+    if skl_el is None:
+        raise ValueError(
+            "No skeleton found in XLIFF. "
+            "Re-export from Anova Typist with the 'Export bilingual XLIFF' option enabled."
+        )
+    int_file_el = skl_el.find(f"{{{NS}}}internal-file")
+    b64_content = "".join((int_file_el.text or "").split())
+    skeleton_docx = _b64.b64decode(b64_content)
+
+    # ── Collect translations: {(block_idx, sent_idx): target_text} ────────
+    body_el = file_el.find(f"{{{NS}}}body")
+    translations: dict = {}
+    for tu in body_el.findall(f"{{{NS}}}trans-unit"):
+        tu_id = tu.get("id", "")
+        m = re.match(r"^b(\d+)-s(\d+)$", tu_id)
+        if not m:
+            continue
+        bi, si = int(m.group(1)), int(m.group(2))
+        tgt = tu.find(f"{{{NS}}}target")
+        if tgt is not None and tgt.text and tgt.text.strip():
+            translations[(bi, si)] = tgt.text.strip()
+
+    if not translations:
+        raise ValueError(
+            "No translated segments found in XLIFF. "
+            "Make sure the file has been fully translated before applying."
+        )
+
+    # ── Reconstruct paragraph texts: join sentences per block ─────────────
+    block_sents: dict = {}
+    for (bi, si), text in translations.items():
+        block_sents.setdefault(bi, {})[si] = text
+    para_text: dict = {
+        bi: " ".join(sents[si] for si in sorted(sents))
+        for bi, sents in block_sents.items()
+    }
+
+    # ── Apply to Word: replace text in Transcription section ──────────────
+    from docx import Document as _Document
+    doc = _Document(io.BytesIO(skeleton_docx))
+
+    # Find start of "5. Transcription" section
+    trans_start = None
+    for idx, para in enumerate(doc.paragraphs):
+        if "5. Transcription" in para.text and para.style.name.startswith("Heading"):
+            trans_start = idx + 1
+            break
+    if trans_start is None:
+        raise ValueError(
+            "Could not find '5. Transcription' heading in the skeleton Word document."
+        )
+
+    trans_paras = [p for p in doc.paragraphs[trans_start:] if p.text.strip()]
+    block_counter = 0
+    for para in trans_paras:
+        if block_counter in para_text:
+            translated = para_text[block_counter]
+            # Preserve first run's formatting; clear others
+            for run in para.runs:
+                run.text = ""
+            if para.runs:
+                para.runs[0].text = translated
+            else:
+                para.add_run(translated)
+        block_counter += 1
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.read()
 
 
