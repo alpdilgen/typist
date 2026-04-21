@@ -672,6 +672,10 @@ if start_btn and uploaded_file:
         st.session_state["t_img_placeholders"] = include_image_placeholders
         st.session_state["t_model"]            = model
 
+        # Force a re-render from the top so _phase / _locked are recomputed
+        # with t_result now in session_state (phase 1 → all controls lock).
+        st.rerun()
+
     except ValueError as e:
         st.error(f"❌ Error: {e}")
         st.session_state.pop("t_result", None)   # clear stale results on error
@@ -701,16 +705,6 @@ if "t_result" in st.session_state:
     uncertain_count = _extract_uncertain_count(result.get("metadata", ""))
 
     st.markdown("---")
-
-    # ── "Start New Transcription" reset button (always visible once locked) ─
-    reset_col, _ = st.columns([2, 5])
-    with reset_col:
-        st.button(
-            "🔄 Start New Transcription",
-            on_click=_reset_workflow,
-            use_container_width=True,
-            help="Clears the current transcription and unlocks all controls.",
-        )
 
     # ── Uncertain elements warning ──────────────────────────────────────────
     if uncertain_count > 0:
@@ -772,6 +766,17 @@ if "t_result" in st.session_state:
                 file_name=stem + "_transcription.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
+            )
+
+        # ── Start New Transcription (phase 2 only) ──────────────────────────
+        st.markdown("")
+        reset_col, _ = st.columns([2, 5])
+        with reset_col:
+            st.button(
+                "🔄 Start New Transcription",
+                on_click=_reset_workflow,
+                use_container_width=True,
+                help="Clears everything and unlocks all controls for a new document.",
             )
 
         st.markdown("---")
@@ -1021,51 +1026,52 @@ if "t_result" in st.session_state and st.session_state.get("t_ready_for_download
             st.warning(quality)
 
 # ---------------------------------------------------------------------------
-# Apply Translation — upload translated XLIFF → get translated Word
+# Apply Translation — only shown in phase 2 (after Save & Export)
 # ---------------------------------------------------------------------------
-st.markdown("---")
-st.markdown("### 🔄 Apply Translation")
-st.caption(
-    "After translating the XLIFF file in your CAT tool, upload it here "
-    "to generate the translated Word document."
-)
+if _phase == 2:
+    st.markdown("---")
+    st.markdown("### 🔄 Apply Translation")
+    st.caption(
+        "After translating the XLIFF file in your CAT tool, upload it here "
+        "to generate the translated Word document."
+    )
 
-translated_xliff = st.file_uploader(
-    "Upload translated XLIFF (.xlf)",
-    type=["xlf", "xliff"],
-    key="apply_xliff_upload",
-    help="Upload the translated .xlf file exported from your CAT tool.",
-)
+    translated_xliff = st.file_uploader(
+        "Upload translated XLIFF (.xlf)",
+        type=["xlf", "xliff"],
+        key="apply_xliff_upload",
+        help="Upload the translated .xlf file exported from your CAT tool.",
+    )
 
-if translated_xliff:
-    apply_btn = st.button("🔄 Generate Translated Word Document", type="primary",
-                          use_container_width=True)
-    if apply_btn:
-        try:
-            with st.spinner("Applying translations to Word document…"):
-                translated_docx = apply_xliff_to_docx(translated_xliff.getvalue())
+    if translated_xliff:
+        apply_btn = st.button("🔄 Generate Translated Word Document", type="primary",
+                              use_container_width=True)
+        if apply_btn:
+            try:
+                with st.spinner("Applying translations to Word document…"):
+                    translated_docx = apply_xliff_to_docx(translated_xliff.getvalue())
 
-            xlf_stem = translated_xliff.name.rsplit(".", 1)[0]
-            st.download_button(
-                label="⬇️ Download Translated Word File (.docx)",
-                data=translated_docx,
-                file_name=xlf_stem + "_translated.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
-            st.success("✅ Translations applied successfully.")
-        except ValueError as e:
-            st.error(f"❌ {e}")
-        except Exception as e:
-            st.error(f"❌ Unexpected error: {e}")
-            with st.expander("Technical details"):
-                import traceback
-                st.code(traceback.format_exc())
+                xlf_stem = translated_xliff.name.rsplit(".", 1)[0]
+                st.download_button(
+                    label="⬇️ Download Translated Word File (.docx)",
+                    data=translated_docx,
+                    file_name=xlf_stem + "_translated.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                )
+                st.success("✅ Translations applied successfully.")
+            except ValueError as e:
+                st.error(f"❌ {e}")
+            except Exception as e:
+                st.error(f"❌ Unexpected error: {e}")
+                with st.expander("Technical details"):
+                    import traceback
+                    st.code(traceback.format_exc())
 
 # ---------------------------------------------------------------------------
-# Help section when no file is uploaded
+# Help section — only when no active workflow
 # ---------------------------------------------------------------------------
-if not uploaded_file:
+if not uploaded_file and _phase == 0:
     st.markdown("---")
     with st.expander("ℹ️ How it works"):
         st.markdown("""
