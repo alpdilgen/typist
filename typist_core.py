@@ -909,6 +909,17 @@ def get_segments_for_editor(content: str) -> list:
                     "type":      block["type"],
                     "text":      sentence,
                 })
+
+    # Normalise page numbers so they always start at 1.
+    # Claude sometimes emits ---PAGE BREAK--- before the first page's content
+    # which would push all segments to pages 2+ — subtract the offset.
+    if segments:
+        min_page = min(s["page"] for s in segments)
+        if min_page > 1:
+            offset = min_page - 1
+            for s in segments:
+                s["page"] -= offset
+
     return segments
 
 
