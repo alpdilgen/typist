@@ -11,7 +11,6 @@ from typist_core import (
     transcribe_document,
     create_docx,
     create_xliff,
-    _extract_source_language,
     SUPPORTED_FORMATS,
     MAX_FILE_SIZE_MB,
 )
@@ -235,20 +234,31 @@ with st.sidebar:
         ),
     )
     if export_xliff:
+        st.caption(
+            "⚠️ Both codes are **required** and must exactly match your CAT tool project settings."
+        )
         source_lang_input = st.text_input(
-            "Source language code",
-            placeholder="auto-detected (e.g. en-US)",
+            "Source language code *",
+            placeholder="e.g. en-US, es, de-DE, fr-FR",
             help=(
-                "BCP-47 language tag for the source language. "
-                "Leave blank to auto-detect from the document. "
-                "Examples: en-US, en-GB, de-DE, fr-FR, tr-TR, bg"
+                "Required. BCP-47 language tag — must match the source language "
+                "configured in your CAT tool project exactly. "
+                "Examples: en-US, en-GB, es, de-DE, fr-FR, tr-TR, bg, zh-CN"
             ),
         )
         target_lang_input = st.text_input(
-            "Target language code",
-            placeholder="e.g. tr-TR, de-DE, bg",
-            help="BCP-47 language tag for the translation target language.",
+            "Target language code *",
+            placeholder="e.g. tr-TR, bg, de-DE",
+            help=(
+                "Required. BCP-47 language tag — must match the target language "
+                "configured in your CAT tool project exactly. "
+                "Examples: tr-TR, bg, de-DE, fr-FR, es, zh-CN"
+            ),
         )
+        if export_xliff and not source_lang_input.strip():
+            st.warning("⚠️ Enter the source language code to generate the XLIFF file.")
+        if export_xliff and not target_lang_input.strip():
+            st.warning("⚠️ Enter the target language code to generate the XLIFF file.")
     else:
         source_lang_input = ""
         target_lang_input = ""
@@ -372,11 +382,17 @@ if start_btn and uploaded_file:
         docx_bytes = create_docx(result)
 
         xliff_bytes    = None
-        detected_src   = _extract_source_language(result.get("metadata", ""))
-        final_src_lang = source_lang_input.strip() or detected_src
+        src_lang       = source_lang_input.strip()
+        tgt_lang       = target_lang_input.strip()
 
-        if export_xliff and target_lang_input.strip():
-            xliff_bytes = create_xliff(result, target_lang_input.strip(), final_src_lang)
+        if export_xliff:
+            if not src_lang or not tgt_lang:
+                st.warning(
+                    "⚠️ XLIFF file was not generated — both source and target language codes are required. "
+                    "Enter them in the sidebar and re-run."
+                )
+            else:
+                xliff_bytes = create_xliff(result, tgt_lang, src_lang)
 
         step2.markdown(
             '<div class="step-indicator step-done">✅ Step 2/3 — Output files ready</div>',
@@ -393,8 +409,8 @@ if start_btn and uploaded_file:
         st.session_state["t_docx"]             = docx_bytes
         st.session_state["t_xliff"]            = xliff_bytes
         st.session_state["t_filename"]         = filename
-        st.session_state["t_src_lang"]         = final_src_lang
-        st.session_state["t_tgt_lang"]         = target_lang_input.strip()
+        st.session_state["t_src_lang"]         = src_lang
+        st.session_state["t_tgt_lang"]         = tgt_lang
         st.session_state["t_export_xliff"]     = export_xliff
         st.session_state["t_img_placeholders"] = include_image_placeholders
         st.session_state["t_model"]            = model
