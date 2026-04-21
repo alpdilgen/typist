@@ -18,6 +18,105 @@ from typist_core import (
 load_dotenv()
 
 # ---------------------------------------------------------------------------
+# BCP-47 Language list (IANA Language Subtag Registry / XLIFF xs:language)
+# Format: ("Display Label", "bcp47-code")
+# Sorted alphabetically by display label
+# ---------------------------------------------------------------------------
+_LANG_OPTIONS = [
+    ("— Select —", ""),
+    ("Afrikaans — af-ZA", "af-ZA"),
+    ("Albanian — sq-AL", "sq-AL"),
+    ("Amharic — am-ET", "am-ET"),
+    ("Arabic — ar-SA", "ar-SA"),
+    ("Azerbaijani — az-AZ", "az-AZ"),
+    ("Basque — eu-ES", "eu-ES"),
+    ("Belarusian — be-BY", "be-BY"),
+    ("Bengali — bn-IN", "bn-IN"),
+    ("Bosnian — bs-BA", "bs-BA"),
+    ("Bulgarian — bg-BG", "bg-BG"),
+    ("Catalan — ca-ES", "ca-ES"),
+    ("Chinese Simplified — zh-CN", "zh-CN"),
+    ("Chinese Traditional (HK) — zh-HK", "zh-HK"),
+    ("Chinese Traditional (TW) — zh-TW", "zh-TW"),
+    ("Croatian — hr-HR", "hr-HR"),
+    ("Czech — cs-CZ", "cs-CZ"),
+    ("Danish — da-DK", "da-DK"),
+    ("Dutch (Belgium) — nl-BE", "nl-BE"),
+    ("Dutch (Netherlands) — nl-NL", "nl-NL"),
+    ("English (Australia) — en-AU", "en-AU"),
+    ("English (Canada) — en-CA", "en-CA"),
+    ("English (Ireland) — en-IE", "en-IE"),
+    ("English (UK) — en-GB", "en-GB"),
+    ("English (US) — en-US", "en-US"),
+    ("Estonian — et-EE", "et-EE"),
+    ("Finnish — fi-FI", "fi-FI"),
+    ("Filipino — fil-PH", "fil-PH"),
+    ("French (Belgium) — fr-BE", "fr-BE"),
+    ("French (Canada) — fr-CA", "fr-CA"),
+    ("French (France) — fr-FR", "fr-FR"),
+    ("French (Switzerland) — fr-CH", "fr-CH"),
+    ("Galician — gl-ES", "gl-ES"),
+    ("Georgian — ka-GE", "ka-GE"),
+    ("German (Austria) — de-AT", "de-AT"),
+    ("German (Germany) — de-DE", "de-DE"),
+    ("German (Switzerland) — de-CH", "de-CH"),
+    ("Greek — el-GR", "el-GR"),
+    ("Gujarati — gu-IN", "gu-IN"),
+    ("Hebrew — he-IL", "he-IL"),
+    ("Hindi — hi-IN", "hi-IN"),
+    ("Hungarian — hu-HU", "hu-HU"),
+    ("Icelandic — is-IS", "is-IS"),
+    ("Indonesian — id-ID", "id-ID"),
+    ("Irish — ga-IE", "ga-IE"),
+    ("Italian (Italy) — it-IT", "it-IT"),
+    ("Italian (Switzerland) — it-CH", "it-CH"),
+    ("Japanese — ja-JP", "ja-JP"),
+    ("Kannada — kn-IN", "kn-IN"),
+    ("Kazakh — kk-KZ", "kk-KZ"),
+    ("Khmer — km-KH", "km-KH"),
+    ("Korean — ko-KR", "ko-KR"),
+    ("Lao — lo-LA", "lo-LA"),
+    ("Latvian — lv-LV", "lv-LV"),
+    ("Lithuanian — lt-LT", "lt-LT"),
+    ("Macedonian — mk-MK", "mk-MK"),
+    ("Malay — ms-MY", "ms-MY"),
+    ("Malayalam — ml-IN", "ml-IN"),
+    ("Marathi — mr-IN", "mr-IN"),
+    ("Mongolian — mn-MN", "mn-MN"),
+    ("Nepali — ne-NP", "ne-NP"),
+    ("Norwegian — nb-NO", "nb-NO"),
+    ("Persian — fa-IR", "fa-IR"),
+    ("Polish — pl-PL", "pl-PL"),
+    ("Portuguese (Brazil) — pt-BR", "pt-BR"),
+    ("Portuguese (Portugal) — pt-PT", "pt-PT"),
+    ("Punjabi — pa-IN", "pa-IN"),
+    ("Romanian — ro-RO", "ro-RO"),
+    ("Russian — ru-RU", "ru-RU"),
+    ("Serbian — sr-RS", "sr-RS"),
+    ("Sinhala — si-LK", "si-LK"),
+    ("Slovak — sk-SK", "sk-SK"),
+    ("Slovenian — sl-SI", "sl-SI"),
+    ("Spanish (Argentina) — es-AR", "es-AR"),
+    ("Spanish (Colombia) — es-CO", "es-CO"),
+    ("Spanish (Mexico) — es-MX", "es-MX"),
+    ("Spanish (Spain) — es-ES", "es-ES"),
+    ("Swahili — sw-KE", "sw-KE"),
+    ("Swedish (Finland) — sv-FI", "sv-FI"),
+    ("Swedish (Sweden) — sv-SE", "sv-SE"),
+    ("Tamil — ta-IN", "ta-IN"),
+    ("Telugu — te-IN", "te-IN"),
+    ("Thai — th-TH", "th-TH"),
+    ("Turkish — tr-TR", "tr-TR"),
+    ("Ukrainian — uk-UA", "uk-UA"),
+    ("Urdu — ur-PK", "ur-PK"),
+    ("Vietnamese — vi-VN", "vi-VN"),
+    ("Welsh — cy-GB", "cy-GB"),
+    ("Zulu — zu-ZA", "zu-ZA"),
+]
+_LANG_LABELS  = [label for label, _ in _LANG_OPTIONS]
+_LANG_CODE_OF = {label: code for label, code in _LANG_OPTIONS}
+
+# ---------------------------------------------------------------------------
 # Page Configuration
 # ---------------------------------------------------------------------------
 st.set_page_config(
@@ -235,30 +334,27 @@ with st.sidebar:
     )
     if export_xliff:
         st.caption(
-            "⚠️ Both codes are **required** and must exactly match your CAT tool project settings."
+            "Select the language codes that **exactly match** your CAT tool project settings."
         )
-        source_lang_input = st.text_input(
-            "Source language code *",
-            placeholder="e.g. en-US, es, de-DE, fr-FR",
-            help=(
-                "Required. BCP-47 language tag — must match the source language "
-                "configured in your CAT tool project exactly. "
-                "Examples: en-US, en-GB, es, de-DE, fr-FR, tr-TR, bg, zh-CN"
-            ),
+        src_label = st.selectbox(
+            "Source language *",
+            options=_LANG_LABELS,
+            index=0,
+            help="BCP-47 code for the document's source language. Must match the source language in your CAT tool project.",
         )
-        target_lang_input = st.text_input(
-            "Target language code *",
-            placeholder="e.g. tr-TR, bg, de-DE",
-            help=(
-                "Required. BCP-47 language tag — must match the target language "
-                "configured in your CAT tool project exactly. "
-                "Examples: tr-TR, bg, de-DE, fr-FR, es, zh-CN"
-            ),
+        tgt_label = st.selectbox(
+            "Target language *",
+            options=_LANG_LABELS,
+            index=0,
+            help="BCP-47 code for the translation target language. Must match the target language in your CAT tool project.",
         )
-        if export_xliff and not source_lang_input.strip():
-            st.warning("⚠️ Enter the source language code to generate the XLIFF file.")
-        if export_xliff and not target_lang_input.strip():
-            st.warning("⚠️ Enter the target language code to generate the XLIFF file.")
+        source_lang_input = _LANG_CODE_OF.get(src_label, "")
+        target_lang_input = _LANG_CODE_OF.get(tgt_label, "")
+
+        if not source_lang_input:
+            st.warning("⚠️ Select a source language to generate the XLIFF file.")
+        if not target_lang_input:
+            st.warning("⚠️ Select a target language to generate the XLIFF file.")
     else:
         source_lang_input = ""
         target_lang_input = ""
