@@ -99,6 +99,27 @@ def _get_display_image(file_bytes: bytes, file_ext: str, page_idx: int = 0):
 load_dotenv()
 
 # ---------------------------------------------------------------------------
+# Workflow phase — computed ONCE at the top so every widget can use it
+# ---------------------------------------------------------------------------
+#   Phase 0 — no transcription yet        → all controls active
+#   Phase 1 — transcription done, editing → sidebar + uploader locked
+#   Phase 2 — Save & Export done          → everything locked, downloads shown
+# ---------------------------------------------------------------------------
+def _compute_phase() -> int:
+    if "t_result" not in st.session_state:
+        return 0
+    if not st.session_state.get("t_ready_for_download", False):
+        return 1
+    return 2
+
+
+def _reset_workflow():
+    """Clears all Typist session state — resets to phase 0."""
+    for k in [k for k in list(st.session_state.keys()) if k.startswith("t_")]:
+        del st.session_state[k]
+
+
+# ---------------------------------------------------------------------------
 # BCP-47 Language list (IANA Language Subtag Registry / XLIFF xs:language)
 # Format: ("Display Label", "bcp47-code")
 # Sorted alphabetically by display label
@@ -206,6 +227,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# Evaluate phase every render — all widgets below read this value.
+_phase  = _compute_phase()
+_locked = _phase >= 1   # True while editing OR after export
 
 # ---------------------------------------------------------------------------
 # CSS — Anova Colour Palette
@@ -402,6 +427,7 @@ with st.sidebar:
         "Claude Model",
         ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
         index=0,
+        disabled=_locked,
         help="Sonnet recommended — best balance of speed and quality.",
     )
 
@@ -410,6 +436,7 @@ with st.sidebar:
     include_image_placeholders = st.checkbox(
         "Include image descriptions",
         value=False,
+        disabled=_locked,
         help=(
             "When checked, images and diagrams found in the document will be "
             "described with [IMAGE: …] placeholders in the transcription. "
@@ -422,6 +449,7 @@ with st.sidebar:
     export_xliff = st.checkbox(
         "Export bilingual XLIFF file",
         value=False,
+        disabled=_locked,
         help=(
             "In addition to the Word file, generate a standard XLIFF 1.2 bilingual file "
             "(.xlf) for import into any CAT tool — "
@@ -437,12 +465,14 @@ with st.sidebar:
             "Source language *",
             options=_LANG_LABELS,
             index=0,
+            disabled=_locked,
             help="BCP-47 code for the document's source language. Must match the source language in your CAT tool project.",
         )
         tgt_label = st.selectbox(
             "Target language *",
             options=_LANG_LABELS,
             index=0,
+            disabled=_locked,
             help="BCP-47 code for the translation target language. Must match the target language in your CAT tool project.",
         )
         source_lang_input = _LANG_CODE_OF.get(src_label, "")
@@ -455,6 +485,14 @@ with st.sidebar:
     else:
         source_lang_input = ""
         target_lang_input = ""
+
+    # ── Phase lock notice ───────────────────────────────────────────────────
+    if _locked:
+        st.markdown("---")
+        st.info(
+            "🔒 Settings locked while editing.  \n"
+            "Click **Start New Transcription** in the main area to unlock."
+        )
 
     st.markdown("---")
     st.markdown("### 📋 Supported Formats")
@@ -500,6 +538,7 @@ st.markdown("### 📁 Upload Document")
 uploaded_file = st.file_uploader(
     label="Drag and drop or browse for your PDF or image file",
     type=list(SUPPORTED_FORMATS.keys()),
+    disabled=_locked,
     help=f"Max {MAX_FILE_SIZE_MB} MB. Supported: {', '.join(f'.{e.upper()}' for e in sorted(set(SUPPORTED_FORMATS.keys())))}",
 )
 
@@ -528,7 +567,7 @@ st.markdown("---")
 start_btn = st.button(
     "🔍 Start Transcription",
     type="primary",
-    disabled=not uploaded_file,
+    disabled=not uploaded_file or _locked,
     use_container_width=True,
 )
 
@@ -662,6 +701,16 @@ if "t_result" in st.session_state:
     uncertain_count = _extract_uncertain_count(result.get("metadata", ""))
 
     st.markdown("---")
+
+    # ── "Start New Transcription" reset button (always visible once locked) ─
+    reset_col, _ = st.columns([2, 5])
+    with reset_col:
+        st.button(
+            "🔄 Start New Transcription",
+            on_click=_reset_workflow,
+            use_container_width=True,
+            help="Clears the current transcription and unlocks all controls.",
+        )
 
     # ── Uncertain elements warning ──────────────────────────────────────────
     if uncertain_count > 0:
@@ -832,6 +881,9 @@ if "t_segments" in st.session_state:
             ]
             df = pd.DataFrame(df_rows)
 
+            # Phase 1 → editable; Phase 2 → read-only (exported, locked)
+            _cells_locked = (_phase != 1)
+
             edited_df = st.data_editor(
                 df,
                 column_config={
@@ -842,9 +894,14 @@ if "t_segments" in st.session_state:
                     ),
                     "Transcription": st.column_config.TextColumn(
                         "Transcription", width="large",
-                        help="Click a cell to edit. Tab / Enter to confirm.",
+                        help=(
+                            "Click a cell to edit. Tab / Enter to confirm."
+                            if not _cells_locked else
+                            "Read-only — click Save & Export to edit again."
+                        ),
                     ),
                 },
+                disabled=_cells_locked,
                 use_container_width=True,
                 hide_index=True,
                 num_rows="fixed",
@@ -864,14 +921,22 @@ if "t_segments" in st.session_state:
 
     # ── Save & Export ───────────────────────────────────────────────────────
     st.markdown("")
-    save_col, _ = st.columns([2, 3])
+    save_col, status_col = st.columns([2, 3])
     with save_col:
         save_btn = st.button(
             "💾 Save & Export",
             type="primary",
             use_container_width=True,
+            disabled=(_phase != 1),   # only active while editing
             key="save_export_btn",
         )
+    with status_col:
+        if _phase == 2:
+            st.markdown(
+                "<p style='padding-top:8px;color:#1A6A64;font-weight:600'>"
+                "✅ Exported — use download buttons above or start a new transcription.</p>",
+                unsafe_allow_html=True,
+            )
 
     if save_btn:
         with st.spinner("Rebuilding files from edited segments…"):
