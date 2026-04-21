@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Anova Typist</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231e1e2e'/><text y='24' x='4' font-size='22'>🖨</text></svg>" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════
+     HEADER
+════════════════════════════════════════════════════ -->
+<header class="app-header">
+  <div class="logo">
+    <span style="font-size:26px">🖨️</span>
+    <span class="logo-text">Anova <span>Typist</span></span>
+  </div>
+  <span class="tagline">Digitise scanned documents with Claude Vision</span>
+  <div class="header-spacer"></div>
+  <div class="phase-indicator" title="Workflow phases">
+    <div class="phase-dot" id="ph0" title="Upload"></div>
+    <div class="phase-dot" id="ph1" title="Edit"></div>
+    <div class="phase-dot" id="ph2" title="Export"></div>
+  </div>
+</header>
+
+<div class="app-body">
+
+<!-- ═══════════════════════════════════════════════════
+     SIDEBAR
+════════════════════════════════════════════════════ -->
+<aside class="sidebar">
+
+  <!-- Access Key -->
+  <div class="sidebar-section" id="sidebar-auth">
+    <span class="sidebar-label">🔑 Access</span>
+    <div id="key-status" class="key-badge warn">⚠ Key required</div>
+    <input
+      type="password"
+      id="access-key-input"
+      placeholder="Enter access key…"
+      autocomplete="off"
+    />
+  </div>
+
+  <hr class="sidebar-divider" />
+
+  <!-- Model -->
+  <div class="sidebar-section">
+    <span class="sidebar-label">⚙ Model</span>
+    <select id="model-select">
+      <option value="claude-sonnet-4-6" selected>claude-sonnet-4-6</option>
+      <option value="claude-opus-4-6">claude-opus-4-6</option>
+      <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
+    </select>
+  </div>
+
+  <hr class="sidebar-divider" />
+
+  <!-- Image Handling -->
+  <div class="sidebar-section">
+    <span class="sidebar-label">🖼 Image Handling</span>
+    <label class="checkbox-row">
+      <input type="checkbox" id="img-placeholders" checked />
+      Include image descriptions
+    </label>
+  </div>
+
+  <hr class="sidebar-divider" />
+
+  <!-- XLIFF Export -->
+  <div class="sidebar-section">
+    <span class="sidebar-label">📤 Bilingual Export</span>
+    <label class="checkbox-row">
+      <input type="checkbox" id="xliff-enable" />
+      Export bilingual XLIFF file
+    </label>
+    <div id="xliff-options" class="hidden" style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+      <input type="text" id="xliff-target-lang" placeholder="Target language (e.g. ES)" />
+      <input type="text" id="xliff-source-lang" placeholder="Source language (auto)" />
+    </div>
+  </div>
+
+  <hr class="sidebar-divider" />
+
+  <!-- Supported formats -->
+  <div class="sidebar-section">
+    <span class="sidebar-label">📄 Supported Formats</span>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+      <span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 7px;font-size:11px">.PDF</span>
+      <span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 7px;font-size:11px">.JPEG</span>
+      <span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 7px;font-size:11px">.PNG</span>
+      <span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 7px;font-size:11px">.TIFF</span>
+      <span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 7px;font-size:11px">.BMP</span>
+      <span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 7px;font-size:11px">.WEBP</span>
+    </div>
+  </div>
+
+</aside>
+
+<!-- ═══════════════════════════════════════════════════
+     MAIN
+════════════════════════════════════════════════════ -->
+<main class="main-content">
+
+  <!-- ── PHASE 0: Upload ─────────────────────────── -->
+  <div id="phase-upload" class="card">
+    <div class="card-title">📁 Upload Document</div>
+    <div
+      class="upload-zone"
+      id="upload-zone"
+      role="button"
+      tabindex="0"
+      aria-label="Upload file"
+    >
+      <input type="file" id="file-input"
+        accept=".pdf,.jpeg,.jpg,.png,.webp,.tiff,.tif,.bmp" />
+      <div class="upload-icon">📂</div>
+      <div>Drag &amp; drop or <strong>click to browse</strong></div>
+      <div class="upload-hint">PDF, JPEG, PNG, WEBP, TIFF, BMP — max 20 MB</div>
+      <div class="upload-filename hidden" id="upload-filename"></div>
+    </div>
+
+    <div style="margin-top:16px">
+      <button class="btn btn-primary btn-full" id="btn-transcribe" disabled>
+        🔍 Start Transcription
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Processing spinner ──────────────────────── -->
+  <div id="phase-processing" class="card hidden">
+    <div class="progress-wrap">
+      <div class="spinner"></div>
+      <div class="progress-label" id="progress-label">Transcribing document…</div>
+      <div style="font-size:12px;color:var(--text-muted)">This may take 30–90 seconds depending on file size.</div>
+    </div>
+  </div>
+
+  <!-- ── Error banner ────────────────────────────── -->
+  <div id="error-banner" class="alert alert-error hidden">
+    <span>⚠️</span>
+    <span id="error-msg"></span>
+  </div>
+
+  <!-- ── PHASE 1: Bilingual Editor ──────────────── -->
+  <div id="phase-editor" class="card hidden">
+    <div class="card-title">✏️ Bilingual Editor
+      <span style="font-size:12px;font-weight:400;color:var(--text-muted);margin-left:8px"
+            id="editor-page-info"></span>
+    </div>
+
+    <div class="editor-wrap">
+      <!-- Left: source document -->
+      <div class="editor-panel">
+        <div class="panel-label">Source Document</div>
+        <div class="pdf-viewer" id="source-viewer">
+          <!-- iframe for PDF, img for images -->
+        </div>
+        <div class="page-nav" id="page-nav">
+          <button id="btn-prev-page" disabled>‹ Prev</button>
+          <span id="page-counter">Page 1 / 1</span>
+          <button id="btn-next-page" disabled>Next ›</button>
+        </div>
+      </div>
+
+      <!-- Right: editable segments -->
+      <div class="editor-panel">
+        <div class="panel-label">Transcription</div>
+        <div class="segments-scroll" id="segments-scroll">
+          <table class="seg-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Page</th>
+                <th>Text</th>
+              </tr>
+            </thead>
+            <tbody id="seg-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;display:flex;gap:12px;justify-content:flex-end">
+      <button class="btn btn-ghost" id="btn-reset">↩ New Document</button>
+      <button class="btn btn-teal" id="btn-save-export">
+        💾 Save &amp; Export
+      </button>
+    </div>
+  </div>
+
+  <!-- ── PHASE 2: Downloads ─────────────────────── -->
+  <div id="phase-downloads" class="card hidden">
+    <div class="card-title">📥 Download Files</div>
+    <div class="download-grid">
+      <div class="download-item">
+        <div class="dl-label">Transcription (Word)</div>
+        <button class="btn btn-primary" id="btn-dl-docx">⬇ Download .docx</button>
+      </div>
+      <div class="download-item" id="dl-xliff-wrap" style="display:none">
+        <div class="dl-label">Bilingual XLIFF</div>
+        <button class="btn btn-outline" id="btn-dl-xliff">⬇ Download .xlf</button>
+      </div>
+    </div>
+
+    <hr style="margin:18px 0;border-color:var(--border)" />
+
+    <!-- Apply translated XLIFF -->
+    <div class="card-title" style="margin-bottom:10px">🔄 Apply Translated XLIFF</div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+      Upload the XLIFF after translation to generate the translated Word document.
+    </p>
+    <div class="apply-xliff-wrap">
+      <label class="btn btn-ghost" style="cursor:pointer">
+        📂 Choose XLIFF file
+        <input type="file" id="xliff-upload-input" accept=".xlf,.xliff" style="display:none" />
+      </label>
+      <span class="xliff-filename hidden" id="xliff-upload-name"></span>
+      <button class="btn btn-teal" id="btn-apply-xliff" disabled>
+        ⚙ Generate Translated Word
+      </button>
+    </div>
+
+    <hr style="margin:18px 0;border-color:var(--border)" />
+    <button class="btn btn-ghost" id="btn-new-doc">↩ Start New Document</button>
+  </div>
+
+</main>
+</div><!-- /.app-body -->
+
+<script src="/static/app.js"></script>
+</body>
+</html>
