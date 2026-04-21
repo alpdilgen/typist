@@ -52,6 +52,50 @@ def _pdf_page_count(pdf_bytes: bytes) -> int | None:
     except Exception:
         return None
 
+
+_EDITOR_H = 720   # shared height (px) for both left image box and right data_editor
+
+
+def _panel_img_html(img_bytes: bytes, mime: str) -> str:
+    """
+    Wraps an image in a fixed-height scrollable div so the source panel
+    matches the segment-table panel exactly.
+    """
+    import base64 as _b64
+    b64 = _b64.b64encode(img_bytes).decode()
+    return (
+        f'<div style="height:{_EDITOR_H}px;overflow-y:auto;overflow-x:hidden;'
+        f'border:1px solid #E0E0E0;border-radius:8px;background:#FAFAFA;">'
+        f'<img src="data:{mime};base64,{b64}" '
+        f'style="width:100%;display:block;" />'
+        f'</div>'
+    )
+
+
+def _get_display_image(file_bytes: bytes, file_ext: str, page_idx: int = 0):
+    """
+    Returns (png_bytes, mime) ready for _panel_img_html.
+    For PDFs, renders the requested page. For TIFF/BMP, converts via Pillow.
+    Returns (None, None) on failure.
+    """
+    if file_ext == "pdf":
+        rendered = _render_pdf_page(file_bytes, page_idx)
+        return (rendered, "image/png") if rendered else (None, None)
+    if file_ext in ("tiff", "tif", "bmp"):
+        try:
+            from PIL import Image as _PILImage
+            pil = _PILImage.open(io.BytesIO(file_bytes))
+            buf = io.BytesIO()
+            pil.save(buf, format="PNG")
+            return buf.getvalue(), "image/png"
+        except Exception:
+            return None, None
+    _mime_map = {
+        "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "png": "image/png",  "webp": "image/webp",
+    }
+    return file_bytes, _mime_map.get(file_ext, "image/png")
+
 load_dotenv()
 
 # ---------------------------------------------------------------------------
@@ -301,6 +345,22 @@ st.markdown("""
         font-size: 0.8rem;
         font-weight: 600;
         margin: 2px;
+    }
+
+    /* Bilingual editor — match data_editor border to source panel box */
+    [data-testid="stDataEditor"] > div {
+        border: 1px solid #E0E0E0 !important;
+        border-radius: 8px !important;
+        background: white !important;
+    }
+
+    /* Editor panel labels */
+    .panel-label {
+        font-weight: 700;
+        font-size: 0.92rem;
+        color: #3A3A3A;
+        margin-bottom: 6px;
+        display: block;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -724,34 +784,36 @@ if "t_segments" in st.session_state:
     left_panel, right_panel = st.columns([1, 1], gap="medium")
 
     with left_panel:
-        st.markdown(
-            "<p style='font-weight:700;font-size:0.95rem;"
-            "color:#3A3A3A;margin-bottom:6px'>📄 Source Document</p>",
-            unsafe_allow_html=True,
-        )
+        st.markdown('<span class="panel-label">📄 Source Document</span>',
+                    unsafe_allow_html=True)
         if file_bytes_ed:
-            if file_ext_ed in ("jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif"):
-                st.image(file_bytes_ed, use_column_width=True)
-            elif file_ext_ed == "pdf":
-                rendered = _render_pdf_page(file_bytes_ed, current_page - 1)
-                if rendered:
-                    st.image(rendered, use_column_width=True,
-                             caption=f"Page {current_page} / {total_pages}")
-                else:
-                    st.info(
-                        f"📄 PDF page {current_page}  \n"
-                        "Install `pypdfium2` to enable page preview:  \n"
-                        "`pip install pypdfium2`"
-                    )
+            img_bytes, img_mime = _get_display_image(
+                file_bytes_ed, file_ext_ed, current_page - 1
+            )
+            if img_bytes:
+                st.markdown(_panel_img_html(img_bytes, img_mime), unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    f'<div style="height:{_EDITOR_H}px;display:flex;align-items:center;'
+                    f'justify-content:center;border:1px solid #E0E0E0;border-radius:8px;'
+                    f'background:#FAFAFA;color:#888;font-size:0.9rem;">'
+                    f'📄 PDF page {current_page} — install <code>pypdfium2</code> for preview'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
         else:
-            st.info("Source file not available in this session.")
+            st.markdown(
+                f'<div style="height:{_EDITOR_H}px;display:flex;align-items:center;'
+                f'justify-content:center;border:1px solid #E0E0E0;border-radius:8px;'
+                f'background:#FAFAFA;color:#888;font-size:0.9rem;">'
+                f'Source file not available in this session.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     with right_panel:
-        st.markdown(
-            "<p style='font-weight:700;font-size:0.95rem;"
-            "color:#3A3A3A;margin-bottom:6px'>✏️ Transcription (editable)</p>",
-            unsafe_allow_html=True,
-        )
+        st.markdown('<span class="panel-label">✏️ Transcription (editable)</span>',
+                    unsafe_allow_html=True)
 
         page_segs = [s for s in all_segs if s["page"] == current_page]
 
@@ -786,7 +848,7 @@ if "t_segments" in st.session_state:
                 use_container_width=True,
                 hide_index=True,
                 num_rows="fixed",
-                height=700,
+                height=_EDITOR_H,
                 key=f"editor_p{current_page}",
             )
 
