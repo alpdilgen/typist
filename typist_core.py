@@ -199,13 +199,11 @@ def transcribe_document(
 def _strip_code_fences(text: str) -> str:
     """
     Claude bazen metadata bölümünü ``` kod bloğuna sarar.
-    Bu fonksiyon açılış ve kapanış ``` işaretlerini temizler.
+    Bu fonksiyon tüm açılış ve kapanış ``` işaretlerini temizler.
+    Metadata bölümünde asla gerçek kod bloğu olmaz.
     """
-    text = text.strip()
-    # Açılış fence: ```  ya da ```text  ya da ```yaml vb.
-    text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-    # Kapanış fence
-    text = re.sub(r"\n?```$", "", text)
+    # Tüm ``` fence satırlarını kaldır (başında veya sonunda ne olursa)
+    text = re.sub(r"```[a-zA-Z]*", "", text)
     return text.strip()
 
 
