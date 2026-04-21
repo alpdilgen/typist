@@ -275,11 +275,62 @@ def _extract_uncertain_count(metadata: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Flagged Items Extractor
+# ---------------------------------------------------------------------------
+_FLAG_TYPE_PATTERN = re.compile(
+    r"\[HANDWRITTEN\s*-\s*(UNCERTAIN|ILLEGIBLE)([^\]]*)\]"
+    r"|\[(\?[^\]]*)\]"
+    r"|\[BLANK FIELD\]"
+    r"|\[LANGUAGE SWITCH:[^\]]*\]",
+    re.IGNORECASE,
+)
+
+def _extract_flagged_items(content: str) -> list[dict]:
+    """
+    Scans transcription content and returns a list of flagged items.
+    Each item: {"line_no": int, "flag_type": str, "content": str}
+    """
+    flagged = []
+    for line_no, line in enumerate(content.splitlines(), start=1):
+        matches = list(_FLAG_TYPE_PATTERN.finditer(line))
+        if not matches:
+            continue
+        for m in matches:
+            if m.group(1):  # HANDWRITTEN - UNCERTAIN/ILLEGIBLE
+                flag_type = f"Handwritten – {m.group(1).capitalize()}"
+            elif m.group(3):  # [?word]
+                flag_type = "Uncertain reading"
+            elif m.group(0).upper().startswith("[BLANK"):
+                flag_type = "Blank field"
+            else:
+                flag_type = "Language switch"
+            # Truncate long lines for readability in table
+            display = line.strip()
+            if len(display) > 120:
+                display = display[:117] + "..."
+            flagged.append({
+                "line_no":   line_no,
+                "flag_type": flag_type,
+                "content":   display,
+            })
+    return flagged
+
+
+# ---------------------------------------------------------------------------
 # DOCX Generator
 # ---------------------------------------------------------------------------
 def create_docx(result: dict) -> bytes:
     """
     Generates a Word document from the transcription result.
+
+    Document structure (designed for manual review against the original):
+      1. Title + file info
+      2. Document Information   — metadata table
+      3. Formatting Notes       — layout decisions made during transcription
+      4. Quality Notes          — overall quality assessment and limitations
+      5. Flagged Items          — table of uncertain / illegible / blank elements
+      6. Transcription          — full transcribed text
+
     Returns: DOCX file content as bytes.
     """
     doc = Document()
@@ -291,7 +342,7 @@ def create_docx(result: dict) -> bytes:
     section.left_margin = section.right_margin = Cm(2.5)
     section.top_margin  = section.bottom_margin = Cm(2.5)
 
-    # --- Style helpers — Anova Brand Palette ---
+    # --- Anova Brand Palette ---
     ANOVA_CHARCOAL = RGBColor(0x3A, 0x3A, 0x3A)   # Primary text / headings
     ANOVA_CORAL    = RGBColor(0xE8, 0x5C, 0x4A)   # Accents, CTAs, highlights
     ANOVA_AMBER    = RGBColor(0xF7, 0x93, 0x1E)   # Warnings, uncertain elements
@@ -316,7 +367,6 @@ def create_docx(result: dict) -> bytes:
         pPr.append(pBdr)
 
     def add_shaded_paragraph(text: str, fill_hex: str = "FFF3CD", text_color: RGBColor = None):
-        """Adds a paragraph with background shading (warning box)."""
         p = doc.add_paragraph()
         pPr = p._p.get_or_add_pPr()
         shd = OxmlElement("w:shd")
@@ -331,7 +381,13 @@ def create_docx(result: dict) -> bytes:
             run.font.color.rgb = text_color
         return p
 
-    # --- Title ---
+    content      = result.get("content", "")
+    uncertain_count = _extract_uncertain_count(result.get("metadata", ""))
+    flagged_items   = _extract_flagged_items(content)
+
+    # =========================================================================
+    # 1. TITLE
+    # =========================================================================
     title = doc.add_heading("Anova Typist — Transcription Report", 0)
     for run in title.runs:
         run.font.color.rgb = ANOVA_CHARCOAL
@@ -344,22 +400,11 @@ def create_docx(result: dict) -> bytes:
     add_divider()
     doc.add_paragraph()
 
-    # --- Uncertain Elements Warning Box ---
-    uncertain_count = _extract_uncertain_count(result.get("metadata", ""))
-    if uncertain_count > 0:
-        add_shaded_paragraph(
-            f"⚠  ATTENTION: This document contains {uncertain_count} uncertain element(s) "
-            f"flagged during transcription. These are marked throughout the text. "
-            f"Manual review is recommended for flagged sections.",
-            fill_hex="FFF3CD",
-            text_color=ANOVA_AMBER,
-        )
-        doc.add_paragraph()
-
-    # --- Section 1: Document Information ---
+    # =========================================================================
+    # 2. DOCUMENT INFORMATION
+    # =========================================================================
     add_heading("1. Document Information", level=1)
 
-    # Metadata as a styled table
     meta_lines = [ln for ln in result.get("metadata", "").splitlines() if ":" in ln and ln.strip()]
     if meta_lines:
         tbl = doc.add_table(rows=len(meta_lines), cols=2)
@@ -378,33 +423,21 @@ def create_docx(result: dict) -> bytes:
                 run.font.color.rgb = ANOVA_CHARCOAL
             for run in cell_val.paragraphs[0].runs:
                 run.font.size = Pt(10)
-                # Highlight uncertain elements row
                 if "Uncertain" in key and uncertain_count > 0:
                     run.font.color.rgb = ANOVA_AMBER
                     run.bold = True
     else:
-        doc.add_paragraph(result.get("metadata", "")).runs[0].font.size = Pt(10)
+        p = doc.add_paragraph(result.get("metadata", ""))
+        if p.runs:
+            p.runs[0].font.size = Pt(10)
 
     add_divider()
     doc.add_paragraph()
 
-    # --- Section 2: Transcription ---
-    add_heading("2. Transcription", level=1)
-
-    if not result.get("include_image_placeholders", True):
-        note_p = doc.add_paragraph()
-        note_run = note_p.add_run("Note: Image descriptions have been omitted per user settings.")
-        note_run.italic = True
-        note_run.font.size = Pt(9)
-        note_run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
-
-    _add_markdown_content(doc, result.get("content", ""))
-
-    add_divider()
-    doc.add_paragraph()
-
-    # --- Section 3: Formatting Notes ---
-    add_heading("3. Formatting Notes", level=1)
+    # =========================================================================
+    # 3. FORMATTING NOTES
+    # =========================================================================
+    add_heading("2. Formatting Notes", level=1)
     fn_text = result.get("formatting_notes", "")
     if fn_text:
         p = doc.add_paragraph(fn_text)
@@ -414,18 +447,108 @@ def create_docx(result: dict) -> bytes:
     add_divider()
     doc.add_paragraph()
 
-    # --- Section 4: Quality Notes ---
-    add_heading("4. Quality Notes", level=1)
+    # =========================================================================
+    # 4. QUALITY NOTES
+    # =========================================================================
+    add_heading("3. Quality Notes", level=1)
     qn_text = result.get("quality_notes", "")
     if qn_text:
         p = doc.add_paragraph(qn_text)
         if p.runs:
             p.runs[0].font.size = Pt(10)
 
-    # --- Footer ---
+    add_divider()
+    doc.add_paragraph()
+
+    # =========================================================================
+    # 5. FLAGGED ITEMS  (only rendered when there are uncertain elements)
+    # =========================================================================
+    add_heading("4. Flagged Items", level=1)
+
+    if flagged_items:
+        add_shaded_paragraph(
+            f"⚠  {len(flagged_items)} item(s) require manual review. "
+            f"Each flagged line is listed below and highlighted in amber in the transcription.",
+            fill_hex="FFF3CD",
+            text_color=ANOVA_AMBER,
+        )
+        doc.add_paragraph()
+
+        # Table: # | Flag Type | Content
+        hdr_labels = ["#", "Flag Type", "Content"]
+        tbl = doc.add_table(rows=1 + len(flagged_items), cols=3)
+        tbl.style = "Table Grid"
+
+        # Header row
+        hdr_cells = tbl.rows[0].cells
+        for col_idx, label in enumerate(hdr_labels):
+            hdr_cells[col_idx].text = label
+            for run in hdr_cells[col_idx].paragraphs[0].runs:
+                run.bold = True
+                run.font.size = Pt(10)
+                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            # Charcoal background for header
+            tc = hdr_cells[col_idx]._tc
+            tcPr = tc.get_or_add_tcPr()
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear")
+            shd.set(qn("w:color"), "auto")
+            shd.set(qn("w:fill"), "3A3A3A")
+            tcPr.append(shd)
+
+        # Data rows
+        for row_idx, item in enumerate(flagged_items, start=1):
+            row_cells = tbl.rows[row_idx].cells
+            row_cells[0].text = str(item["line_no"])
+            row_cells[1].text = item["flag_type"]
+            row_cells[2].text = item["content"]
+            for col_idx in range(3):
+                for run in row_cells[col_idx].paragraphs[0].runs:
+                    run.font.size = Pt(9)
+                    if col_idx == 1:
+                        run.font.color.rgb = ANOVA_AMBER
+                        run.bold = True
+            # Alternate row shading
+            if row_idx % 2 == 0:
+                for col_idx in range(3):
+                    tc = row_cells[col_idx]._tc
+                    tcPr = tc.get_or_add_tcPr()
+                    shd = OxmlElement("w:shd")
+                    shd.set(qn("w:val"), "clear")
+                    shd.set(qn("w:color"), "auto")
+                    shd.set(qn("w:fill"), "F4F4F4")
+                    tcPr.append(shd)
+    else:
+        p = doc.add_paragraph("No flagged items — transcription completed with full confidence.")
+        if p.runs:
+            p.runs[0].font.size = Pt(10)
+            p.runs[0].font.italic = True
+            p.runs[0].font.color.rgb = RGBColor(0x55, 0x99, 0x55)
+
+    add_divider()
+    doc.add_paragraph()
+
+    # =========================================================================
+    # 6. TRANSCRIPTION
+    # =========================================================================
+    add_heading("5. Transcription", level=1)
+
+    if not result.get("include_image_placeholders", True):
+        note_p = doc.add_paragraph()
+        note_run = note_p.add_run("Note: Image descriptions have been omitted per user settings.")
+        note_run.italic = True
+        note_run.font.size = Pt(9)
+        note_run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+
+    _add_markdown_content(doc, content)
+
+    # =========================================================================
+    # FOOTER
+    # =========================================================================
     doc.add_paragraph()
     footer_p = doc.add_paragraph(
-        f"Anova Translation | Generated: {date.today().isoformat()} | Model: {result.get('model', 'claude-sonnet-4-6')}"
+        f"Anova Translation  |  Generated: {date.today().isoformat()}"
+        f"  |  Model: {result.get('model', 'claude-sonnet-4-6')}"
     )
     footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in footer_p.runs:
