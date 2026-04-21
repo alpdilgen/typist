@@ -823,11 +823,14 @@ def create_xliff(result: dict, target_language: str, source_language: str = "") 
     ]
 
     for i, seg in enumerate(segments, start=1):
+        # XLIFF 2.2 spec: <target> is optional.
+        # Omitting it entirely = "needs translation" (not yet started).
+        # An empty <target/> would be read as "translated to empty string" by
+        # some CAT tools (including memoQ), causing zero-segment import errors.
         lines += [
             f'    <unit id="u{i}">',
             f'      <segment id="s{i}" state="initial">',
             f'        <source xml:space="preserve">{_xml_escape(seg)}</source>',
-            f'        <target/>',
             f'      </segment>',
             f'    </unit>',
         ]
