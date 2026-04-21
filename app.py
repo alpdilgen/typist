@@ -1,7 +1,7 @@
 """
-app.py — Anova Typist Streamlit Arayüzü
-========================================
-Taranmış doküman → Claude Vision transkripsiyon → Word (.docx) indirme
+app.py — Anova Typist Streamlit Interface
+==========================================
+Scanned document → Claude Vision transcription → Word (.docx) download
 """
 
 import os
@@ -17,7 +17,7 @@ from typist_core import (
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Sayfa Yapılandırması
+# Page Configuration
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Anova Typist",
@@ -27,20 +27,31 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# CSS — Anova Renk Paleti
+# CSS — Anova Colour Palette
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Genel arka plan */
-    .stApp { background-color: #F8F9FA; }
+    /* ---------------------------------------------------------------
+       Anova Brand Palette
+       Charcoal  #3A3A3A  — primary text / headings
+       Coral     #E85C4A  — accents, CTAs, highlights
+       Amber     #F7931E  — warnings
+       Teal      #4ECDC4  — secondary accents, dividers
+       White     #FFFFFF  — backgrounds
+       Light Grey #F4F4F4 — page backgrounds, stripes
+    --------------------------------------------------------------- */
 
-    /* Başlık alanı */
+    /* General background */
+    .stApp { background-color: #F4F4F4; }
+
+    /* Header area */
     .typist-header {
-        background: linear-gradient(135deg, #1B2A4A 0%, #2C3E6B 100%);
+        background: linear-gradient(135deg, #3A3A3A 0%, #5A5A5A 100%);
         padding: 2rem 2.5rem;
         border-radius: 12px;
         margin-bottom: 1.5rem;
         color: white;
+        border-bottom: 4px solid #4ECDC4;
     }
     .typist-header h1 {
         color: white !important;
@@ -49,15 +60,15 @@ st.markdown("""
         font-weight: 700;
     }
     .typist-header p {
-        color: #C8D4F0;
+        color: #D0D0D0;
         margin: 0.5rem 0 0 0;
         font-size: 1rem;
     }
-    .typist-header .accent { color: #F06A00; }
+    .typist-header .accent { color: #E85C4A; }
 
-    /* Upload kutusu */
+    /* Upload box */
     .upload-box {
-        border: 2px dashed #1B2A4A;
+        border: 2px dashed #4ECDC4;
         border-radius: 10px;
         padding: 2rem;
         text-align: center;
@@ -65,21 +76,21 @@ st.markdown("""
         margin-bottom: 1rem;
     }
 
-    /* Sonuç kartları */
+    /* Result cards */
     .result-card {
         background: white;
         border-radius: 10px;
         padding: 1.5rem;
         margin-bottom: 1rem;
-        border-left: 4px solid #F06A00;
+        border-left: 4px solid #E85C4A;
         box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     }
     .result-card h3 {
-        color: #1B2A4A;
+        color: #3A3A3A;
         margin-top: 0;
     }
 
-    /* Metadata tablosu */
+    /* Metadata table */
     .meta-row {
         display: flex;
         padding: 0.4rem 0;
@@ -87,14 +98,35 @@ st.markdown("""
     }
     .meta-key {
         font-weight: 600;
-        color: #1B2A4A;
+        color: #3A3A3A;
         min-width: 200px;
     }
-    .meta-val { color: #444; }
+    .meta-val { color: #555; }
 
-    /* İndirme butonu */
+    /* Uncertain warning box */
+    .uncertain-warning {
+        background: #FFF3CD;
+        border: 1px solid #F7931E;
+        border-left: 5px solid #F7931E;
+        border-radius: 8px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1rem;
+        color: #7A4A00;
+        font-weight: 600;
+    }
+    .uncertain-warning .warn-title {
+        font-size: 1.05rem;
+        margin-bottom: 0.3rem;
+    }
+    .uncertain-warning .warn-body {
+        font-weight: 400;
+        font-size: 0.9rem;
+        color: #5A3A00;
+    }
+
+    /* Download button */
     .stDownloadButton > button {
-        background: #F06A00 !important;
+        background: #E85C4A !important;
         color: white !important;
         border: none !important;
         border-radius: 8px !important;
@@ -105,10 +137,10 @@ st.markdown("""
         transition: background 0.2s;
     }
     .stDownloadButton > button:hover {
-        background: #D45A00 !important;
+        background: #C94A38 !important;
     }
 
-    /* İlerleme */
+    /* Progress steps */
     .step-indicator {
         display: flex;
         align-items: center;
@@ -118,14 +150,15 @@ st.markdown("""
         margin-bottom: 0.5rem;
         font-size: 0.95rem;
     }
-    .step-active  { background: #EDF2FF; color: #1B2A4A; }
-    .step-done    { background: #E6F9F0; color: #1A7A4A; }
+    .step-active { background: #F4F4F4; color: #3A3A3A; border-left: 3px solid #4ECDC4; }
+    .step-done   { background: #E6F9F7; color: #1A6A64; border-left: 3px solid #4ECDC4; }
 
-    /* Format badge'leri */
+    /* Format badges */
     .format-badge {
         display: inline-block;
-        background: #EDF2FF;
-        color: #1B2A4A;
+        background: #F4F4F4;
+        color: #3A3A3A;
+        border: 1px solid #4ECDC4;
         border-radius: 4px;
         padding: 2px 8px;
         font-size: 0.8rem;
@@ -136,10 +169,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# API Key Yönetimi
+# API Key Management
 # ---------------------------------------------------------------------------
 def get_api_key() -> str | None:
-    """Önce .env dosyasından, sonra sidebar'dan alır."""
+    """Reads API key from .env first, then from sidebar input."""
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if key:
         return key
@@ -147,40 +180,52 @@ def get_api_key() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar — Ayarlar
+# Sidebar — Settings
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("## ⚙️ Ayarlar")
+    st.markdown("## ⚙️ Settings")
 
     if not os.getenv("ANTHROPIC_API_KEY"):
-        st.markdown("### 🔑 API Anahtarı")
+        st.markdown("### 🔑 API Key")
         api_key_input = st.text_input(
             "Anthropic API Key",
             type="password",
             placeholder="sk-ant-...",
-            help=".env dosyasına ANTHROPIC_API_KEY eklerseniz bu alan kaybolur.",
+            help="Add ANTHROPIC_API_KEY to your .env file to hide this field.",
         )
         if api_key_input:
             st.session_state["api_key"] = api_key_input
-            st.success("API anahtarı ayarlandı ✓")
+            st.success("API key set ✓")
     else:
-        st.success("API anahtarı .env'den yüklendi ✓")
+        st.success("API key loaded from .env ✓")
 
     st.markdown("---")
     st.markdown("### 🤖 Model")
     model = st.selectbox(
-        "Claude Modeli",
+        "Claude Model",
         ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
         index=0,
-        help="Sonnet önerilir — hız/kalite dengesi en iyi.",
+        help="Sonnet recommended — best balance of speed and quality.",
     )
 
     st.markdown("---")
-    st.markdown("### 📋 Desteklenen Formatlar")
+    st.markdown("### 🖼️ Image Handling")
+    include_image_placeholders = st.checkbox(
+        "Include image descriptions",
+        value=False,
+        help=(
+            "When checked, images and diagrams found in the document will be "
+            "described with [IMAGE: …] placeholders in the transcription. "
+            "Uncheck to omit all image references."
+        ),
+    )
+
+    st.markdown("---")
+    st.markdown("### 📋 Supported Formats")
     for fmt in sorted(set(SUPPORTED_FORMATS.keys())):
         st.markdown(f'<span class="format-badge">.{fmt.upper()}</span>', unsafe_allow_html=True)
 
-    st.markdown(f"\n**Max boyut:** {MAX_FILE_SIZE_MB} MB")
+    st.markdown(f"\n**Max size:** {MAX_FILE_SIZE_MB} MB")
 
     st.markdown("---")
     st.markdown(
@@ -190,133 +235,145 @@ with st.sidebar:
     )
 
 # ---------------------------------------------------------------------------
-# Ana Başlık
+# Main Header
 # ---------------------------------------------------------------------------
 st.markdown("""
 <div class="typist-header">
     <h1>🖨️ Anova <span class="accent">Typist</span></h1>
-    <p>Taranmış dokümanları Claude Vision ile dijitalleştirin — Word dosyası olarak indirin</p>
+    <p>Digitise scanned documents with Claude Vision &mdash; download as a Word file</p>
 </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# API Key Kontrolü
+# API Key Check
 # ---------------------------------------------------------------------------
 api_key = get_api_key()
 if not api_key:
-    st.warning("⚠️ Lütfen sol panelden Anthropic API anahtarınızı girin.")
+    st.warning("⚠️ Please enter your Anthropic API key in the sidebar.")
     st.info(
-        "API anahtarı yoksa [console.anthropic.com](https://console.anthropic.com) "
-        "adresinden ücretsiz deneme hesabı açabilirsiniz."
+        "No API key? Create a free trial account at "
+        "[console.anthropic.com](https://console.anthropic.com)."
     )
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Dosya Yükleme
+# File Upload
 # ---------------------------------------------------------------------------
-st.markdown("### 📁 Doküman Yükle")
-
-accepted_types = list(set(
-    f"image/{v.split('/')[1]}" if v.startswith("image/") else v
-    for v in SUPPORTED_FORMATS.values()
-) | {"application/pdf"})
+st.markdown("### 📁 Upload Document")
 
 uploaded_file = st.file_uploader(
-    label="PDF veya görsel dosyanızı sürükleyin / seçin",
+    label="Drag and drop or browse for your PDF or image file",
     type=list(SUPPORTED_FORMATS.keys()),
-    help=f"Max {MAX_FILE_SIZE_MB} MB. Desteklenen: {', '.join(f'.{e.upper()}' for e in sorted(set(SUPPORTED_FORMATS.keys())))}",
+    help=f"Max {MAX_FILE_SIZE_MB} MB. Supported: {', '.join(f'.{e.upper()}' for e in sorted(set(SUPPORTED_FORMATS.keys())))}",
 )
 
 # ---------------------------------------------------------------------------
-# Dosya Önizleme
+# File Preview
 # ---------------------------------------------------------------------------
 if uploaded_file:
     col1, col2 = st.columns([2, 1])
     with col1:
-        st.markdown(f"**Dosya:** `{uploaded_file.name}`")
+        st.markdown(f"**File:** `{uploaded_file.name}`")
         size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-        st.markdown(f"**Boyut:** {size_mb:.2f} MB")
+        st.markdown(f"**Size:** {size_mb:.2f} MB")
 
     with col2:
         ext = uploaded_file.name.lower().rsplit(".", 1)[-1]
         if ext in ("jpg", "jpeg", "png", "webp"):
-            st.image(uploaded_file, caption="Önizleme", use_column_width=True)
+            st.image(uploaded_file, caption="Preview", use_column_width=True)
         elif ext == "pdf":
-            st.markdown("📄 PDF dosyası yüklendi")
+            st.markdown("📄 PDF file uploaded")
 
 # ---------------------------------------------------------------------------
-# İşlem Butonu
+# Action Button
 # ---------------------------------------------------------------------------
 st.markdown("---")
 
 start_btn = st.button(
-    "🔍 Transkripsiyon Başlat",
+    "🔍 Start Transcription",
     type="primary",
     disabled=not uploaded_file,
     use_container_width=True,
 )
 
 # ---------------------------------------------------------------------------
-# İşlem
+# Processing
 # ---------------------------------------------------------------------------
 if start_btn and uploaded_file:
     file_bytes = uploaded_file.getvalue()
     filename = uploaded_file.name
 
-    # Adım göstergesi
+    # Step indicator
     progress_container = st.container()
 
     with progress_container:
         step1 = st.markdown(
-            '<div class="step-indicator step-active">⏳ Adım 1/3 — Dosya Claude\'a gönderiliyor...</div>',
+            '<div class="step-indicator step-active">⏳ Step 1/3 — Sending file to Claude...</div>',
             unsafe_allow_html=True,
         )
 
     try:
-        # --- Transkripsiyon ---
-        with st.spinner("Claude dokümanı okuyor ve transkribe ediyor..."):
+        # --- Transcription ---
+        with st.spinner("Claude is reading and transcribing the document..."):
             result = transcribe_document(
                 file_bytes=file_bytes,
                 filename=filename,
                 api_key=api_key,
                 model=model,
+                include_image_placeholders=include_image_placeholders,
             )
 
         step1.markdown(
-            '<div class="step-indicator step-done">✅ Adım 1/3 — Transkripsiyon tamamlandı</div>',
+            '<div class="step-indicator step-done">✅ Step 1/3 — Transcription complete</div>',
             unsafe_allow_html=True,
         )
 
-        # --- DOCX Üretimi ---
+        # --- DOCX Generation ---
         with progress_container:
             step2 = st.markdown(
-                '<div class="step-indicator step-active">⏳ Adım 2/3 — Word belgesi oluşturuluyor...</div>',
+                '<div class="step-indicator step-active">⏳ Step 2/3 — Creating Word document...</div>',
                 unsafe_allow_html=True,
             )
 
         docx_bytes = create_docx(result)
 
         step2.markdown(
-            '<div class="step-indicator step-done">✅ Adım 2/3 — Word belgesi hazır</div>',
+            '<div class="step-indicator step-done">✅ Step 2/3 — Word document ready</div>',
             unsafe_allow_html=True,
         )
 
         with progress_container:
             st.markdown(
-                '<div class="step-indicator step-done">✅ Adım 3/3 — İndirmeye hazır</div>',
+                '<div class="step-indicator step-done">✅ Step 3/3 — Ready to download</div>',
                 unsafe_allow_html=True,
             )
 
         # ---------------------------------------------------------------------------
-        # Sonuçlar
+        # Results
         # ---------------------------------------------------------------------------
         st.markdown("---")
-        st.markdown("## 📊 Sonuçlar")
+        st.markdown("## 📊 Results")
 
-        # İndirme butonu — en üstte
-        docx_filename = filename.rsplit(".", 1)[0] + "_transkripsiyon.docx"
+        # --- Uncertain elements warning (prominent, before download button) ---
+        from typist_core import _extract_uncertain_count
+        uncertain_count = _extract_uncertain_count(result.get("metadata", ""))
+        if uncertain_count > 0:
+            st.markdown(
+                f'<div class="uncertain-warning">'
+                f'<div class="warn-title">⚠️ Attention: {uncertain_count} uncertain element(s) detected</div>'
+                f'<div class="warn-body">'
+                f'Some portions of this document could not be read with full confidence. '
+                f'Flagged items are highlighted in orange in the transcription tab and the Word file. '
+                f'Please review them carefully before using this transcription.'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # Download button — at the top of results
+        docx_filename = filename.rsplit(".", 1)[0] + "_transcription.docx"
         st.download_button(
-            label="⬇️ Word Dosyasını İndir (.docx)",
+            label="⬇️ Download Word File (.docx)",
             data=docx_bytes,
             file_name=docx_filename,
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -324,77 +381,84 @@ if start_btn and uploaded_file:
 
         st.markdown("---")
 
-        # Sekmeler
+        # Tabs
         tab1, tab2, tab3, tab4 = st.tabs([
-            "📋 Doküman Bilgileri",
-            "📝 Transkripsiyon",
-            "🎨 Biçimlendirme",
-            "🔍 Kalite"
+            "📋 Document Info",
+            "📝 Transcription",
+            "🎨 Formatting",
+            "🔍 Quality"
         ])
 
         with tab1:
-            st.markdown("### Doküman Metadata")
+            st.markdown("### Document Metadata")
             st.code(result["metadata"], language=None)
 
         with tab2:
-            st.markdown("### Transkripsiyon İçeriği")
+            st.markdown("### Transcription Content")
+            if uncertain_count > 0:
+                st.info(
+                    f"ℹ️ {uncertain_count} uncertain element(s) are flagged inline with "
+                    "`[UNCERTAIN]`, `[HANDWRITTEN - UNCERTAIN]`, or similar markers."
+                )
             st.markdown(
                 f'<div class="result-card">{result["content"]}</div>',
                 unsafe_allow_html=True,
             )
-            # Ham metin de göster
-            with st.expander("Ham metin (kopyalamak için)"):
+            # Raw text for copy-paste
+            with st.expander("Raw text (for copy-paste)"):
                 st.text_area(
-                    "Transkripsiyon",
+                    "Transcription",
                     value=result["content"],
                     height=300,
                     label_visibility="collapsed",
                 )
 
         with tab3:
-            st.markdown("### Biçimlendirme Notları")
+            st.markdown("### Formatting Notes")
             st.info(result["formatting_notes"])
 
         with tab4:
-            st.markdown("### Kalite Notları")
+            st.markdown("### Quality Notes")
             quality = result["quality_notes"]
             if "high confidence" in quality.lower() or "no manual review" in quality.lower():
                 st.success(quality)
             else:
                 st.warning(quality)
 
-        # Kullanılan model bilgisi
-        st.caption(f"Model: `{model}` | Dosya: `{filename}`")
+        # Model info footer
+        img_label = "with image descriptions" if include_image_placeholders else "without image descriptions"
+        st.caption(f"Model: `{model}` | File: `{filename}` | {img_label}")
 
     except ValueError as e:
-        st.error(f"❌ Hata: {e}")
+        st.error(f"❌ Error: {e}")
     except Exception as e:
-        st.error(f"❌ Beklenmeyen hata: {e}")
-        with st.expander("Teknik detaylar"):
+        st.error(f"❌ Unexpected error: {e}")
+        with st.expander("Technical details"):
             import traceback
             st.code(traceback.format_exc())
 
 # ---------------------------------------------------------------------------
-# Henüz dosya yüklenmemişse yardım
+# Help section when no file is uploaded
 # ---------------------------------------------------------------------------
 if not uploaded_file:
     st.markdown("---")
-    with st.expander("ℹ️ Nasıl çalışır?"):
+    with st.expander("ℹ️ How it works"):
         st.markdown("""
-        1. **Dosyanızı yükleyin** — PDF, JPEG, PNG, TIFF, BMP veya WebP
-        2. **Transkripsiyon başlat** butonuna tıklayın
-        3. Claude Vision dokümanı okur ve metni çıkartır
-        4. **Word dosyasını indirin** — 4 bölümlü rapor:
-           - Doküman bilgileri (dil, sayfa sayısı, kalite)
-           - Tam transkripsiyon (formatlar korunur)
-           - Biçimlendirme notları
-           - Kalite değerlendirmesi
+        1. **Upload your file** — PDF, JPEG, PNG, TIFF, BMP or WebP
+        2. Click **Start Transcription**
+        3. Claude Vision reads the document and extracts the text
+        4. **Download the Word file** — a 4-section report:
+           - Document information (language, page count, quality)
+           - Full transcription (formatting preserved)
+           - Formatting notes
+           - Quality assessment
         """)
 
-    with st.expander("📌 İpuçları"):
+    with st.expander("📌 Tips for best results"):
         st.markdown("""
-        - **En iyi sonuç için:** 300 DPI veya üzeri tarama kalitesi
-        - **Çok sayfalı PDF:** Tek dosya olarak yükleyin, tüm sayfalar işlenir
-        - **El yazısı:** Desteklenir ama belirsiz kısımlar `[HANDWRITTEN - UNCERTAIN]` ile işaretlenir
-        - **Karışık dil:** Otomatik algılanır, dil geçişleri etiketlenir
+        - **Scan quality:** 300 DPI or higher gives the best results
+        - **Multi-page PDF:** Upload as a single file — all pages are processed
+        - **Handwriting:** Supported, but unclear portions are flagged `[HANDWRITTEN - UNCERTAIN]`
+        - **Mixed languages:** Auto-detected; language switches are labelled
+        - **Image descriptions:** Enable the checkbox in the sidebar to include `[IMAGE: …]` placeholders
         """)

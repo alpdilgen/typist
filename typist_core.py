@@ -1,8 +1,8 @@
 """
-typist_core.py — Anova Typist Çekirdek Mantığı
-===============================================
-Bu modül hem Streamlit prototipinde hem de FastAPI portalında kullanılır.
-Bağımlılık: anthropic, python-docx, Pillow
+typist_core.py — Anova Typist Core Logic
+=========================================
+Used by both the Streamlit prototype and the FastAPI portal.
+Dependencies: anthropic, python-docx, Pillow
 """
 
 import base64
@@ -20,7 +20,7 @@ from docx.shared import Pt, RGBColor, Cm
 from PIL import Image
 
 # ---------------------------------------------------------------------------
-# Desteklenen formatlar
+# Supported formats
 # ---------------------------------------------------------------------------
 SUPPORTED_FORMATS = {
     "pdf":  "application/pdf",
@@ -28,17 +28,17 @@ SUPPORTED_FORMATS = {
     "jpg":  "image/jpeg",
     "png":  "image/png",
     "webp": "image/webp",
-    "tiff": "image/png",   # Pillow ile PNG'ye dönüştürülür
+    "tiff": "image/png",   # Converted to PNG via Pillow
     "tif":  "image/png",
-    "bmp":  "image/png",   # Pillow ile PNG'ye dönüştürülür
+    "bmp":  "image/png",   # Converted to PNG via Pillow
 }
 
 MAX_FILE_SIZE_MB = 20
 
 # ---------------------------------------------------------------------------
-# Typist Prompt (SKILL.md ile birebir uyumlu)
+# Typist Prompt (aligned with SKILL.md)
 # ---------------------------------------------------------------------------
-TYPIST_PROMPT = """You are a professional document digitization and transcription agent.
+TYPIST_PROMPT_BASE = """You are a professional document digitization and transcription agent.
 Convert the uploaded document into accurately formatted, machine-readable text while
 preserving original layout, character formatting, and linguistic integrity.
 
@@ -58,7 +58,7 @@ Extract ALL visible text in reading order (left-to-right, top-to-bottom).
 - Tables: pipe format | Col1 | Col2 |
 - Lists: - unordered, 1. ordered
 - Page breaks: ---PAGE BREAK---
-- Unclear word: [?word] | Image/diagram: [IMAGE: description]
+- Unclear word: [?word] | {image_rule}
 - Uncertain handwriting: [HANDWRITTEN - UNCERTAIN: text]
 - Illegible: [HANDWRITTEN - ILLEGIBLE]
 - Language switch: [LANGUAGE SWITCH: Language]
@@ -93,11 +93,20 @@ Uncertain Elements:    [X flagged items]
 [Limitations, unclear sections, recommendations. If no issues: "Document transcribed with high confidence. No manual review required."]
 """
 
+IMAGE_RULE_INCLUDE = "Image/diagram: [IMAGE: description]"
+IMAGE_RULE_EXCLUDE = "Images/diagrams: DO NOT describe images or include any [IMAGE: ...] placeholders. Skip all visual elements silently."
+
+
+def build_prompt(include_image_placeholders: bool = True) -> str:
+    rule = IMAGE_RULE_INCLUDE if include_image_placeholders else IMAGE_RULE_EXCLUDE
+    return TYPIST_PROMPT_BASE.format(image_rule=rule)
+
+
 # ---------------------------------------------------------------------------
-# Yardımcı: Görsel dönüşüm (TIFF, BMP → PNG)
+# Helper: Image conversion (TIFF, BMP → PNG)
 # ---------------------------------------------------------------------------
 def _convert_to_supported(file_bytes: bytes, ext: str) -> tuple[bytes, str]:
-    """TIFF/BMP dosyalarını Claude'un desteklediği PNG formatına dönüştürür."""
+    """Converts TIFF/BMP files to PNG format supported by Claude."""
     if ext in ("tiff", "tif", "bmp"):
         img = Image.open(io.BytesIO(file_bytes))
         buf = io.BytesIO()
@@ -107,45 +116,48 @@ def _convert_to_supported(file_bytes: bytes, ext: str) -> tuple[bytes, str]:
 
 
 # ---------------------------------------------------------------------------
-# Ana Transkripsiyon Fonksiyonu
+# Main Transcription Function
 # ---------------------------------------------------------------------------
 def transcribe_document(
     file_bytes: bytes,
     filename: str,
     api_key: str,
     model: str = "claude-sonnet-4-6",
+    include_image_placeholders: bool = True,
 ) -> dict:
     """
-    Dokümanı Claude Vision ile transkribe eder.
+    Transcribes a document using Claude Vision.
 
     Returns:
         {
-            "raw":               str,   # Claude'un tam yanıtı
-            "metadata":          str,   # Section 1 içeriği
-            "content":           str,   # Section 2 — transkripsiyon
-            "formatting_notes":  str,   # Section 3
-            "quality_notes":     str,   # Section 4
-            "filename":          str,
-            "model":             str,
+            "raw":                      str,   # Claude's full response
+            "metadata":                 str,   # Section 1 content
+            "content":                  str,   # Section 2 — transcription
+            "formatting_notes":         str,   # Section 3
+            "quality_notes":            str,   # Section 4
+            "filename":                 str,
+            "model":                    str,
+            "include_image_placeholders": bool,
         }
     Raises:
-        ValueError: Desteklenmeyen format veya büyük dosya
-        anthropic.APIError: API hatası
+        ValueError: Unsupported format or file too large
+        anthropic.APIError: API error
     """
-    # --- Validasyon ---
+    # --- Validation ---
     ext = filename.lower().rsplit(".", 1)[-1]
     if ext not in SUPPORTED_FORMATS:
         raise ValueError(
-            f"Desteklenmeyen format: .{ext}\n"
-            f"Desteklenenler: {', '.join(f'.{e}' for e in SUPPORTED_FORMATS)}"
+            f"Unsupported format: .{ext}\n"
+            f"Supported: {', '.join(f'.{e}' for e in SUPPORTED_FORMATS)}"
         )
 
     size_mb = len(file_bytes) / (1024 * 1024)
     if size_mb > MAX_FILE_SIZE_MB:
-        raise ValueError(f"Dosya çok büyük: {size_mb:.1f} MB (max {MAX_FILE_SIZE_MB} MB)")
+        raise ValueError(f"File too large: {size_mb:.1f} MB (max {MAX_FILE_SIZE_MB} MB)")
 
-    # --- İçerik bloğunu hazırla ---
+    # --- Build content block ---
     client = anthropic.Anthropic(api_key=api_key)
+    prompt = build_prompt(include_image_placeholders)
 
     if ext == "pdf":
         file_b64 = base64.standard_b64encode(file_bytes).decode()
@@ -158,7 +170,7 @@ def transcribe_document(
                     "data": file_b64,
                 },
             },
-            {"type": "text", "text": TYPIST_PROMPT},
+            {"type": "text", "text": prompt},
         ]
     else:
         converted_bytes, media_type = _convert_to_supported(file_bytes, ext)
@@ -172,10 +184,10 @@ def transcribe_document(
                     "data": file_b64,
                 },
             },
-            {"type": "text", "text": TYPIST_PROMPT},
+            {"type": "text", "text": prompt},
         ]
 
-    # --- Claude API çağrısı ---
+    # --- Claude API call ---
     message = client.messages.create(
         model=model,
         max_tokens=8192,
@@ -184,11 +196,12 @@ def transcribe_document(
 
     raw_text = message.content[0].text
 
-    # --- Yanıtı parse et ---
-    sections = _parse_sections(raw_text)
+    # --- Parse response ---
+    sections = _parse_sections(raw_text, include_image_placeholders)
     sections["raw"] = raw_text
     sections["filename"] = filename
     sections["model"] = model
+    sections["include_image_placeholders"] = include_image_placeholders
 
     return sections
 
@@ -198,26 +211,25 @@ def transcribe_document(
 # ---------------------------------------------------------------------------
 def _strip_code_fences(text: str) -> str:
     """
-    Claude bazen metadata bölümünü ``` kod bloğuna sarar.
-    Bu fonksiyon tüm açılış ve kapanış ``` işaretlerini temizler.
-    Metadata bölümünde asla gerçek kod bloğu olmaz.
+    Claude sometimes wraps the metadata section in ``` code blocks.
+    This function removes all opening and closing ``` markers.
+    Metadata never contains legitimate code blocks.
     """
-    # Tüm ``` fence satırlarını kaldır (başında veya sonunda ne olursa)
     text = re.sub(r"```[a-zA-Z]*", "", text)
     return text.strip()
 
 
 def _clean_html_entities(text: str) -> str:
-    """&nbsp; ve diğer yaygın HTML entity'lerini temiz karakterlere çevirir."""
+    """Converts &nbsp; and other common HTML entities to clean characters."""
     replacements = {
-        "&nbsp;":  " ",
-        "&amp;":   "&",
-        "&lt;":    "<",
-        "&gt;":    ">",
-        "&quot;":  '"',
-        "&#39;":   "'",
-        "&mdash;": "—",
-        "&ndash;": "–",
+        "&nbsp;":   " ",
+        "&amp;":    "&",
+        "&lt;":     "<",
+        "&gt;":     ">",
+        "&quot;":   '"',
+        "&#39;":    "'",
+        "&mdash;":  "—",
+        "&ndash;":  "–",
         "&hellip;": "…",
     }
     for entity, char in replacements.items():
@@ -225,52 +237,70 @@ def _clean_html_entities(text: str) -> str:
     return text
 
 
-def _parse_sections(text: str) -> dict:
-    """Claude yanıtından 4 bölümü ayıklar."""
+def _strip_image_tags(text: str) -> str:
+    """Removes [IMAGE: ...] placeholders from transcription content."""
+    return re.sub(r"\[IMAGE:[^\]]*\]", "", text).strip()
+
+
+def _parse_sections(text: str, include_image_placeholders: bool = True) -> dict:
+    """Extracts the 4 sections from Claude's response."""
     pattern = re.compile(
         r"###\s*SECTION\s*(\d)\s*[—–-]\s*[^\n]+\n(.*?)(?=###\s*SECTION\s*\d|$)",
         re.DOTALL | re.IGNORECASE,
     )
     found = {m.group(1): m.group(2).strip() for m in pattern.finditer(text)}
 
-    # Metadata bölümündeki kod fence işaretlerini temizle
-    metadata_raw = found.get("1", "Metadata ayrıştırılamadı.")
+    # Clean metadata code fences
+    metadata_raw = found.get("1", "Metadata could not be parsed.")
     metadata_clean = _strip_code_fences(metadata_raw)
 
-    # Tüm bölümlerde HTML entity'lerini temizle
+    content = found.get("2", "Content could not be parsed.")
+    if not include_image_placeholders:
+        content = _strip_image_tags(content)
+
     return {
         "metadata":         _clean_html_entities(metadata_clean),
-        "content":          _clean_html_entities(found.get("2", "İçerik ayrıştırılamadı.")),
-        "formatting_notes": _clean_html_entities(found.get("3", "Biçimlendirme notu bulunamadı.")),
-        "quality_notes":    _clean_html_entities(found.get("4", "Kalite notu bulunamadı.")),
+        "content":          _clean_html_entities(content),
+        "formatting_notes": _clean_html_entities(found.get("3", "No formatting notes found.")),
+        "quality_notes":    _clean_html_entities(found.get("4", "No quality notes found.")),
     }
 
 
+def _extract_uncertain_count(metadata: str) -> int:
+    """Parses the uncertain elements count from the metadata text."""
+    match = re.search(r"Uncertain Elements\s*:\s*(\d+)", metadata, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 0
+
+
 # ---------------------------------------------------------------------------
-# DOCX Üreticisi
+# DOCX Generator
 # ---------------------------------------------------------------------------
 def create_docx(result: dict) -> bytes:
     """
-    Transkripsiyon sonucundan Word belgesi üretir.
-    Döndürür: DOCX dosyasının bytes içeriği
+    Generates a Word document from the transcription result.
+    Returns: DOCX file content as bytes.
     """
     doc = Document()
 
-    # --- Sayfa yapısı ---
+    # --- Page layout ---
     section = doc.sections[0]
     section.page_width  = Cm(21)
     section.page_height = Cm(29.7)
     section.left_margin = section.right_margin = Cm(2.5)
     section.top_margin  = section.bottom_margin = Cm(2.5)
 
-    # --- Stil yardımcıları ---
-    ANOVA_NAVY  = RGBColor(0x1B, 0x2A, 0x4A)
-    ANOVA_ORANGE = RGBColor(0xF0, 0x6A, 0x00)
+    # --- Style helpers — Anova Brand Palette ---
+    ANOVA_CHARCOAL = RGBColor(0x3A, 0x3A, 0x3A)   # Primary text / headings
+    ANOVA_CORAL    = RGBColor(0xE8, 0x5C, 0x4A)   # Accents, CTAs, highlights
+    ANOVA_AMBER    = RGBColor(0xF7, 0x93, 0x1E)   # Warnings, uncertain elements
+    ANOVA_TEAL     = RGBColor(0x4E, 0xCD, 0xC4)   # Secondary accents, dividers
 
     def add_heading(text: str, level: int = 1):
         p = doc.add_heading(text, level=level)
         for run in p.runs:
-            run.font.color.rgb = ANOVA_NAVY if level == 1 else ANOVA_ORANGE
+            run.font.color.rgb = ANOVA_CHARCOAL if level == 1 else ANOVA_CORAL
         return p
 
     def add_divider():
@@ -281,16 +311,32 @@ def create_docx(result: dict) -> bytes:
         bottom.set(qn("w:val"), "single")
         bottom.set(qn("w:sz"), "6")
         bottom.set(qn("w:space"), "1")
-        bottom.set(qn("w:color"), "1B2A4A")
+        bottom.set(qn("w:color"), "4ECDC4")
         pBdr.append(bottom)
         pPr.append(pBdr)
 
-    # --- Başlık ---
-    title = doc.add_heading("Anova Typist — Transkripsiyon Raporu", 0)
-    for run in title.runs:
-        run.font.color.rgb = ANOVA_NAVY
+    def add_shaded_paragraph(text: str, fill_hex: str = "FFF3CD", text_color: RGBColor = None):
+        """Adds a paragraph with background shading (warning box)."""
+        p = doc.add_paragraph()
+        pPr = p._p.get_or_add_pPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), fill_hex)
+        pPr.append(shd)
+        run = p.add_run(text)
+        run.font.size = Pt(10)
+        run.bold = True
+        if text_color:
+            run.font.color.rgb = text_color
+        return p
 
-    subtitle = doc.add_paragraph(f"Dosya: {result.get('filename', 'bilinmiyor')}")
+    # --- Title ---
+    title = doc.add_heading("Anova Typist — Transcription Report", 0)
+    for run in title.runs:
+        run.font.color.rgb = ANOVA_CHARCOAL
+
+    subtitle = doc.add_paragraph(f"File: {result.get('filename', 'unknown')}")
     subtitle.runs[0].font.size = Pt(10)
     subtitle.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
     subtitle.runs[0].font.italic = True
@@ -298,45 +344,88 @@ def create_docx(result: dict) -> bytes:
     add_divider()
     doc.add_paragraph()
 
-    # --- Bölüm 1: Metadata ---
-    add_heading("1. Doküman Bilgileri", level=1)
-    meta_lines = result.get("metadata", "").splitlines()
-    for line in meta_lines:
-        if ":" in line:
+    # --- Uncertain Elements Warning Box ---
+    uncertain_count = _extract_uncertain_count(result.get("metadata", ""))
+    if uncertain_count > 0:
+        add_shaded_paragraph(
+            f"⚠  ATTENTION: This document contains {uncertain_count} uncertain element(s) "
+            f"flagged during transcription. These are marked throughout the text. "
+            f"Manual review is recommended for flagged sections.",
+            fill_hex="FFF3CD",
+            text_color=ANOVA_AMBER,
+        )
+        doc.add_paragraph()
+
+    # --- Section 1: Document Information ---
+    add_heading("1. Document Information", level=1)
+
+    # Metadata as a styled table
+    meta_lines = [ln for ln in result.get("metadata", "").splitlines() if ":" in ln and ln.strip()]
+    if meta_lines:
+        tbl = doc.add_table(rows=len(meta_lines), cols=2)
+        tbl.style = "Table Grid"
+        for r_idx, line in enumerate(meta_lines):
             key, _, val = line.partition(":")
-            p = doc.add_paragraph()
-            run_key = p.add_run(key.strip() + ": ")
-            run_key.bold = True
-            run_key.font.size = Pt(10)
-            p.add_run(val.strip()).font.size = Pt(10)
-        elif line.strip():
-            doc.add_paragraph(line.strip()).runs[0].font.size = Pt(10)
+            key = key.strip()
+            val = val.strip()
+            cell_key = tbl.cell(r_idx, 0)
+            cell_val = tbl.cell(r_idx, 1)
+            cell_key.text = key
+            cell_val.text = val
+            for run in cell_key.paragraphs[0].runs:
+                run.bold = True
+                run.font.size = Pt(10)
+                run.font.color.rgb = ANOVA_CHARCOAL
+            for run in cell_val.paragraphs[0].runs:
+                run.font.size = Pt(10)
+                # Highlight uncertain elements row
+                if "Uncertain" in key and uncertain_count > 0:
+                    run.font.color.rgb = ANOVA_AMBER
+                    run.bold = True
+    else:
+        doc.add_paragraph(result.get("metadata", "")).runs[0].font.size = Pt(10)
 
     add_divider()
     doc.add_paragraph()
 
-    # --- Bölüm 2: Transkripsiyon ---
-    add_heading("2. Transkripsiyon", level=1)
+    # --- Section 2: Transcription ---
+    add_heading("2. Transcription", level=1)
+
+    if not result.get("include_image_placeholders", True):
+        note_p = doc.add_paragraph()
+        note_run = note_p.add_run("Note: Image descriptions have been omitted per user settings.")
+        note_run.italic = True
+        note_run.font.size = Pt(9)
+        note_run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+
     _add_markdown_content(doc, result.get("content", ""))
 
     add_divider()
     doc.add_paragraph()
 
-    # --- Bölüm 3: Biçimlendirme Notları ---
-    add_heading("3. Biçimlendirme Notları", level=1)
-    doc.add_paragraph(result.get("formatting_notes", "")).runs[0].font.size = Pt(10)
+    # --- Section 3: Formatting Notes ---
+    add_heading("3. Formatting Notes", level=1)
+    fn_text = result.get("formatting_notes", "")
+    if fn_text:
+        p = doc.add_paragraph(fn_text)
+        if p.runs:
+            p.runs[0].font.size = Pt(10)
 
     add_divider()
     doc.add_paragraph()
 
-    # --- Bölüm 4: Kalite Notları ---
-    add_heading("4. Kalite Notları", level=1)
-    doc.add_paragraph(result.get("quality_notes", "")).runs[0].font.size = Pt(10)
+    # --- Section 4: Quality Notes ---
+    add_heading("4. Quality Notes", level=1)
+    qn_text = result.get("quality_notes", "")
+    if qn_text:
+        p = doc.add_paragraph(qn_text)
+        if p.runs:
+            p.runs[0].font.size = Pt(10)
 
     # --- Footer ---
     doc.add_paragraph()
     footer_p = doc.add_paragraph(
-        f"Anova Translation | Üretildi: {date.today().isoformat()} | Model: {result.get('model', 'claude-sonnet-4-6')}"
+        f"Anova Translation | Generated: {date.today().isoformat()} | Model: {result.get('model', 'claude-sonnet-4-6')}"
     )
     footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in footer_p.runs:
@@ -344,7 +433,7 @@ def create_docx(result: dict) -> bytes:
         run.font.color.rgb = RGBColor(0xAA, 0xAA, 0xAA)
         run.font.italic = True
 
-    # --- Bytes olarak döndür ---
+    # --- Return as bytes ---
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
@@ -352,10 +441,16 @@ def create_docx(result: dict) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Markdown → DOCX yardımcısı (temel)
+# Markdown → DOCX helper
 # ---------------------------------------------------------------------------
+UNCERTAIN_PATTERN = re.compile(
+    r"\[HANDWRITTEN\s*-\s*(UNCERTAIN|ILLEGIBLE)[^\]]*\]|\[\?[^\]]*\]|\[BLANK FIELD\]",
+    re.IGNORECASE,
+)
+
 def _add_markdown_content(doc: Document, text: str):
-    """Markdown formatındaki metni DOCX paragraflarına dönüştürür."""
+    """Converts Markdown-formatted text into DOCX paragraphs."""
+    ANOVA_AMBER = RGBColor(0xF7, 0x93, 0x1E)  # Brand amber — uncertain element highlights
     lines = text.splitlines()
     i = 0
     table_buffer = []
@@ -363,13 +458,13 @@ def _add_markdown_content(doc: Document, text: str):
     while i < len(lines):
         line = lines[i]
 
-        # Sayfa sonu
+        # Page break
         if "---PAGE BREAK---" in line or "[PAGE" in line.upper():
             doc.add_page_break()
             i += 1
             continue
 
-        # Tablo başlangıcı
+        # Table start
         if line.strip().startswith("|"):
             table_buffer.append(line)
             i += 1
@@ -380,40 +475,47 @@ def _add_markdown_content(doc: Document, text: str):
             table_buffer = []
             continue
 
-        # Başlıklar
+        # Headings
         if line.startswith("# "):
-            p = doc.add_heading(line[2:].strip(), level=2)
+            doc.add_heading(line[2:].strip(), level=2)
         elif line.startswith("## "):
-            p = doc.add_heading(line[3:].strip(), level=3)
+            doc.add_heading(line[3:].strip(), level=3)
         elif line.startswith("### "):
-            p = doc.add_heading(line[4:].strip(), level=4)
+            doc.add_heading(line[4:].strip(), level=4)
 
-        # Sırasız liste
+        # Unordered list
         elif line.strip().startswith("- "):
             p = doc.add_paragraph(style="List Bullet")
             _apply_inline_formatting(p, line.strip()[2:])
 
-        # Sıralı liste
+        # Ordered list
         elif re.match(r"^\d+\.\s", line.strip()):
             p = doc.add_paragraph(style="List Number")
             _apply_inline_formatting(p, re.sub(r"^\d+\.\s", "", line.strip()))
 
-        # Boş satır
+        # Empty line
         elif not line.strip():
             doc.add_paragraph()
 
-        # Normal paragraf
+        # Normal paragraph — check if it contains uncertain flags
         else:
             p = doc.add_paragraph()
-            _apply_inline_formatting(p, line)
-            p.runs[0].font.size = Pt(10) if p.runs else None
+            if UNCERTAIN_PATTERN.search(line):
+                # Render entire line in warning color + italic
+                run = p.add_run(line)
+                run.font.size = Pt(10)
+                run.font.color.rgb = ANOVA_AMBER
+                run.italic = True
+            else:
+                _apply_inline_formatting(p, line)
+                if p.runs:
+                    p.runs[0].font.size = Pt(10)
 
         i += 1
 
 
 def _apply_inline_formatting(paragraph, text: str):
-    """**bold**, *italic* gibi inline Markdown formatını uygular."""
-    # Basit bold/italic parser
+    """Applies **bold** and *italic* inline Markdown formatting."""
     parts = re.split(r"(\*\*[^*]+\*\*|\*[^*]+\*)", text)
     for part in parts:
         if part.startswith("**") and part.endswith("**"):
@@ -427,11 +529,11 @@ def _apply_inline_formatting(paragraph, text: str):
 
 
 def _add_table(doc: Document, lines: list[str]):
-    """Markdown tablo satırlarından DOCX tablosu oluşturur."""
+    """Creates a DOCX table from Markdown table lines."""
     rows = [
         [cell.strip() for cell in line.strip().strip("|").split("|")]
         for line in lines
-        if not re.match(r"^\|[-| :]+\|$", line.strip())  # separator satırını atla
+        if not re.match(r"^\|[-| :]+\|$", line.strip())
     ]
     if not rows:
         return
@@ -445,6 +547,6 @@ def _add_table(doc: Document, lines: list[str]):
             if c_idx < col_count:
                 cell = table.cell(r_idx, c_idx)
                 cell.text = cell_text
-                if r_idx == 0:  # Header row bold
+                if r_idx == 0:
                     for run in cell.paragraphs[0].runs:
                         run.bold = True
