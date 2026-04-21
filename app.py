@@ -228,9 +228,9 @@ with st.sidebar:
         "Export bilingual XLIFF file",
         value=False,
         help=(
-            "In addition to the Word file, generate a standard XLIFF 2.2 bilingual file "
-            "(OASIS standard, .xlf) for import into any CAT tool — "
-            "SDL Trados 2019+, memoQ 8+, Phrase, Wordfast Pro 6+, Déjà Vu X3+. "
+            "In addition to the Word file, generate a standard XLIFF 1.2 bilingual file "
+            "(.xlf) for import into any CAT tool — "
+            "SDL Trados, memoQ, Phrase, Wordfast, Déjà Vu, OmegaT, and all others. "
             "A separate Transcription Notes Word file will also be provided."
         ),
     )
@@ -359,7 +359,7 @@ if start_btn and uploaded_file:
         )
 
         step2_label = (
-            "⏳ Step 2/3 — Creating Word document and XLIFF 2.2 file..."
+            "⏳ Step 2/3 — Creating Word document and XLIFF 1.2 file..."
             if export_xliff else
             "⏳ Step 2/3 — Creating Word document..."
         )
@@ -463,9 +463,9 @@ if "t_result" in st.session_state:
                 file_name=stem + ".xlf",
                 mime="application/xliff+xml",
                 use_container_width=True,
-                help=f"XLIFF 2.2 (OASIS standard) — import into any CAT tool. Source: {final_src_lang} → Target: {tgt_lang}",
+                help=f"XLIFF 1.2 — import into any CAT tool. Source: {final_src_lang} → Target: {tgt_lang}",
             )
-        st.caption(f"XLIFF 2.2 | Source: `{final_src_lang}` → Target: `{tgt_lang}`")
+        st.caption(f"XLIFF 1.2 | Source: `{final_src_lang}` → Target: `{tgt_lang}`")
 
     elif do_xliff and not xliff_bytes:
         st.download_button(

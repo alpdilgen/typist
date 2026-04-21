@@ -783,26 +783,25 @@ def _segment_for_xliff(content: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# XLIFF 2.2 — OASIS Standard (urn:oasis:names:tc:xliff:document:2.2)
-# Spec: https://github.com/oasis-tcs/xliff-xliff-22
-# Compatible with: SDL Trados 2019+, memoQ 8+, Phrase, Wordfast Pro 6+, Déjà Vu X3+
+# XLIFF 1.2 — Universal bilingual format
+# Spec: https://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html
+# Compatible with ALL major CAT tools: SDL Trados, memoQ, Phrase, Wordfast,
+#   Déjà Vu, OmegaT, Memsource, MateCat, and any XLIFF-capable tool.
 # ---------------------------------------------------------------------------
 def create_xliff(result: dict, target_language: str, source_language: str = "") -> bytes:
     """
-    Generates a standard XLIFF 2.2 bilingual file from transcription result.
-    Follows the OASIS XLIFF 2.2 specification exactly.
+    Generates a standard XLIFF 1.2 bilingual file from transcription result.
 
-    XLIFF 2.2 structure (vs 1.2):
-      - Namespace: urn:oasis:names:tc:xliff:document:2.2
-      - srcLang / trgLang on root <xliff> (not on <file>)
-      - <unit> + <segment> instead of <trans-unit>
-      - No <header>, <body>, <seg-source>, or <mrk> wrappers
-      - segment state="initial" for untranslated content
+    XLIFF 1.2 structure:
+      - Namespace: urn:oasis:names:tc:xliff:document:1.2
+      - source-language / target-language on <file> element
+      - <trans-unit> inside <body>
+      - <source> only (no <target>) = "needs translation" in all CAT tools
       - File extension: .xlf
 
     source_language: BCP-47 code (e.g. 'en-US'). Auto-detected if empty.
     target_language: BCP-47 code (e.g. 'tr-TR').
-    Returns: XLIFF 2.2 file content as UTF-8 bytes.
+    Returns: XLIFF 1.2 file content as UTF-8 bytes.
     """
     src_lang = source_language or _extract_source_language(result.get("metadata", ""))
     filename = result.get("filename", "document")
@@ -812,30 +811,30 @@ def create_xliff(result: dict, target_language: str, source_language: str = "") 
 
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        '<xliff xmlns="urn:oasis:names:tc:xliff:document:2.2"',
-        '       version="2.2"',
-        f'       srcLang="{src_lang}"',
-        f'       trgLang="{target_language}">',
-        f'  <file id="f1" original="{_xml_attr(filename)}">',
-        '    <notes>',
-        f'      <note id="n1" category="tool">Transcribed by Anova Typist on {today} | Model: {model}</note>',
-        '    </notes>',
+        '<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">',
+        f'  <file original="{_xml_attr(filename)}"',
+        f'        source-language="{src_lang}"',
+        f'        target-language="{target_language}"',
+        f'        datatype="plaintext">',
+        '    <header>',
+        '      <tool tool-id="anova-typist" tool-name="Anova Typist"',
+        '            tool-version="1.0" tool-company="Anova Translation"/>',
+        f'      <note>Transcribed by Anova Typist on {today} | Model: {model}</note>',
+        '    </header>',
+        '    <body>',
     ]
 
     for i, seg in enumerate(segments, start=1):
-        # XLIFF 2.2 spec: <target> is optional.
-        # Omitting it entirely = "needs translation" (not yet started).
-        # An empty <target/> would be read as "translated to empty string" by
-        # some CAT tools (including memoQ), causing zero-segment import errors.
+        # Omit <target> entirely — in XLIFF 1.2 this means "needs translation".
+        # An empty <target/> or <target state="new"/> can confuse some importers.
         lines += [
-            f'    <unit id="u{i}">',
-            f'      <segment id="s{i}" state="initial">',
-            f'        <source xml:space="preserve">{_xml_escape(seg)}</source>',
-            f'      </segment>',
-            f'    </unit>',
+            f'      <trans-unit id="{i}" xml:space="preserve">',
+            f'        <source>{_xml_escape(seg)}</source>',
+            f'      </trans-unit>',
         ]
 
     lines += [
+        '    </body>',
         '  </file>',
         '</xliff>',
     ]
